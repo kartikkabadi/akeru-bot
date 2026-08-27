@@ -573,6 +573,8 @@ describe("ProviderCommandReactor", () => {
 
     return {
       engine,
+      dispatch: (command: Parameters<typeof engine.dispatch>[0]) =>
+        Effect.runPromise(engine.dispatch(command)),
       readModel: () => Effect.runPromise(snapshotQuery.getSnapshot()),
       resolveEngine,
       startSession,
@@ -3153,36 +3155,32 @@ describe("ProviderCommandReactor", () => {
     const harness = await createHarness();
     const now = "2026-01-01T00:00:00.000Z";
 
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.session.set",
-        commandId: CommandId.make("cmd-session-set-for-user-input"),
+    await harness.dispatch({
+      type: "thread.session.set",
+      commandId: CommandId.make("cmd-session-set-for-user-input"),
+      threadId: ThreadId.make("thread-1"),
+      session: {
         threadId: ThreadId.make("thread-1"),
-        session: {
-          threadId: ThreadId.make("thread-1"),
-          status: "running",
-          providerName: "codex",
-          runtimeMode: "approval-required",
-          activeTurnId: null,
-          lastError: null,
-          updatedAt: now,
-        },
-        createdAt: now,
-      }),
-    );
+        status: "running",
+        providerName: "codex",
+        runtimeMode: "approval-required",
+        activeTurnId: null,
+        lastError: null,
+        updatedAt: now,
+      },
+      createdAt: now,
+    });
 
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.user-input.respond",
-        commandId: CommandId.make("cmd-user-input-respond"),
-        threadId: ThreadId.make("thread-1"),
-        requestId: asApprovalRequestId("user-input-request-1"),
-        answers: {
-          sandbox_mode: "workspace-write",
-        },
-        createdAt: now,
-      }),
-    );
+    await harness.dispatch({
+      type: "thread.user-input.respond",
+      commandId: CommandId.make("cmd-user-input-respond"),
+      threadId: ThreadId.make("thread-1"),
+      requestId: asApprovalRequestId("user-input-request-1"),
+      answers: {
+        sandbox_mode: "workspace-write",
+      },
+      createdAt: now,
+    });
 
     await waitFor(() => harness.respondToUserInput.mock.calls.length === 1);
     expect(harness.respondToUserInput.mock.calls[0]?.[0]).toEqual({
@@ -3207,55 +3205,49 @@ describe("ProviderCommandReactor", () => {
       ),
     );
 
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.session.set",
-        commandId: CommandId.make("cmd-session-set-for-approval-error"),
+    await harness.dispatch({
+      type: "thread.session.set",
+      commandId: CommandId.make("cmd-session-set-for-approval-error"),
+      threadId: ThreadId.make("thread-1"),
+      session: {
         threadId: ThreadId.make("thread-1"),
-        session: {
-          threadId: ThreadId.make("thread-1"),
-          status: "running",
-          providerName: "codex",
-          runtimeMode: "approval-required",
-          activeTurnId: null,
-          lastError: null,
-          updatedAt: now,
-        },
-        createdAt: now,
-      }),
-    );
+        status: "running",
+        providerName: "codex",
+        runtimeMode: "approval-required",
+        activeTurnId: null,
+        lastError: null,
+        updatedAt: now,
+      },
+      createdAt: now,
+    });
 
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.activity.append",
-        commandId: CommandId.make("cmd-approval-requested"),
-        threadId: ThreadId.make("thread-1"),
-        activity: {
-          id: EventId.make("activity-approval-requested"),
-          tone: "approval",
-          kind: "approval.requested",
-          summary: "Command approval requested",
-          payload: {
-            requestId: "approval-request-1",
-            requestKind: "command",
-          },
-          turnId: null,
-          createdAt: now,
+    await harness.dispatch({
+      type: "thread.activity.append",
+      commandId: CommandId.make("cmd-approval-requested"),
+      threadId: ThreadId.make("thread-1"),
+      activity: {
+        id: EventId.make("activity-approval-requested"),
+        tone: "approval",
+        kind: "approval.requested",
+        summary: "Command approval requested",
+        payload: {
+          requestId: "approval-request-1",
+          requestKind: "command",
         },
+        turnId: null,
         createdAt: now,
-      }),
-    );
+      },
+      createdAt: now,
+    });
 
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.approval.respond",
-        commandId: CommandId.make("cmd-approval-respond-stale"),
-        threadId: ThreadId.make("thread-1"),
-        requestId: asApprovalRequestId("approval-request-1"),
-        decision: "acceptForSession",
-        createdAt: now,
-      }),
-    );
+    await harness.dispatch({
+      type: "thread.approval.respond",
+      commandId: CommandId.make("cmd-approval-respond-stale"),
+      threadId: ThreadId.make("thread-1"),
+      requestId: asApprovalRequestId("approval-request-1"),
+      decision: "acceptForSession",
+      createdAt: now,
+    });
 
     await waitFor(async () => {
       const readModel = await harness.readModel();
@@ -3302,69 +3294,63 @@ describe("ProviderCommandReactor", () => {
       ),
     );
 
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.session.set",
-        commandId: CommandId.make("cmd-session-set-for-user-input-error"),
+    await harness.dispatch({
+      type: "thread.session.set",
+      commandId: CommandId.make("cmd-session-set-for-user-input-error"),
+      threadId: ThreadId.make("thread-1"),
+      session: {
         threadId: ThreadId.make("thread-1"),
-        session: {
-          threadId: ThreadId.make("thread-1"),
-          status: "running",
-          providerName: "claudeAgent",
-          runtimeMode: "approval-required",
-          activeTurnId: null,
-          lastError: null,
-          updatedAt: now,
-        },
-        createdAt: now,
-      }),
-    );
+        status: "running",
+        providerName: "claudeAgent",
+        runtimeMode: "approval-required",
+        activeTurnId: null,
+        lastError: null,
+        updatedAt: now,
+      },
+      createdAt: now,
+    });
 
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.activity.append",
-        commandId: CommandId.make("cmd-user-input-requested"),
-        threadId: ThreadId.make("thread-1"),
-        activity: {
-          id: EventId.make("activity-user-input-requested"),
-          tone: "info",
-          kind: "user-input.requested",
-          summary: "User input requested",
-          payload: {
-            requestId: "user-input-request-1",
-            questions: [
-              {
-                id: "sandbox_mode",
-                header: "Sandbox",
-                question: "Which mode should be used?",
-                options: [
-                  {
-                    label: "workspace-write",
-                    description: "Allow workspace writes only",
-                  },
-                ],
-              },
-            ],
-          },
-          turnId: null,
-          createdAt: now,
+    await harness.dispatch({
+      type: "thread.activity.append",
+      commandId: CommandId.make("cmd-user-input-requested"),
+      threadId: ThreadId.make("thread-1"),
+      activity: {
+        id: EventId.make("activity-user-input-requested"),
+        tone: "info",
+        kind: "user-input.requested",
+        summary: "User input requested",
+        payload: {
+          requestId: "user-input-request-1",
+          questions: [
+            {
+              id: "sandbox_mode",
+              header: "Sandbox",
+              question: "Which mode should be used?",
+              options: [
+                {
+                  label: "workspace-write",
+                  description: "Allow workspace writes only",
+                },
+              ],
+            },
+          ],
         },
+        turnId: null,
         createdAt: now,
-      }),
-    );
+      },
+      createdAt: now,
+    });
 
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.user-input.respond",
-        commandId: CommandId.make("cmd-user-input-respond-stale"),
-        threadId: ThreadId.make("thread-1"),
-        requestId: asApprovalRequestId("user-input-request-1"),
-        answers: {
-          sandbox_mode: "workspace-write",
-        },
-        createdAt: now,
-      }),
-    );
+    await harness.dispatch({
+      type: "thread.user-input.respond",
+      commandId: CommandId.make("cmd-user-input-respond-stale"),
+      threadId: ThreadId.make("thread-1"),
+      requestId: asApprovalRequestId("user-input-request-1"),
+      answers: {
+        sandbox_mode: "workspace-write",
+      },
+      createdAt: now,
+    });
 
     await waitFor(async () => {
       const readModel = await harness.readModel();
