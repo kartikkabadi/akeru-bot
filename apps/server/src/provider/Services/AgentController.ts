@@ -10,6 +10,7 @@ import type {
   ProviderSession,
   ProviderSessionStartInput,
   ProviderStopSessionInput,
+  SandboxSettings,
   ProviderTurnStartResult,
   ProviderUploadFeedbackInput,
   ProviderUploadFeedbackResult,
@@ -33,6 +34,10 @@ export interface AgentControllerEngineSelection extends AgentControllerAvailable
   readonly mode: ProviderInteractionMode;
 }
 
+export type AgentControllerSessionStartInput = ProviderSessionStartInput & {
+  readonly sandboxSettings?: SandboxSettings;
+};
+
 export interface AgentControllerShape {
   /** Resolve a thread's selected mode and model to an available Akeru provider instance. */
   readonly resolveEngine: (input: {
@@ -49,7 +54,7 @@ export interface AgentControllerShape {
 
   readonly startSession: (
     threadId: ThreadId,
-    input: ProviderSessionStartInput,
+    input: AgentControllerSessionStartInput,
   ) => Effect.Effect<ProviderSession, AgentControllerError>;
 
   readonly sendTurn: (

@@ -1048,4 +1048,149 @@ it.layer(NodeServices.layer)("server settings", (it) => {
       );
     }).pipe(Effect.provide(makeServerSettingsLayer())),
   );
+
+  it.effect("rejects known sandbox secrets marked non-sensitive", () =>
+    Effect.gen(function* () {
+      const serverSettings = yield* ServerSettingsModule.ServerSettingsService;
+
+      const error = yield* Effect.flip(
+        serverSettings.updateSettings({
+          sandbox: {
+            providers: {
+              e2b: {
+                environment: [{ name: "E2B_API_KEY", value: "plaintext-key", sensitive: false }],
+              },
+            },
+          },
+        }),
+      );
+
+      assert.deepInclude(error, {
+        operation: "validate-sandbox",
+        providerInstanceId: "sandbox:e2b",
+        environmentVariable: "E2B_API_KEY",
+      });
+      assert.equal((yield* serverSettings.getSettings).sandbox.defaultProvider, "local");
+    }).pipe(Effect.provide(makeServerSettingsLayer())),
+  );
+
+  it.effect("rejects an incomplete remote sandbox default", () =>
+    Effect.gen(function* () {
+      const serverSettings = yield* ServerSettingsModule.ServerSettingsService;
+
+      const error = yield* Effect.flip(
+        serverSettings.updateSettings({
+          sandbox: {
+            defaultProvider: "vercel",
+            providers: {
+              vercel: {
+                environment: [
+                  { name: "VERCEL_TOKEN", value: "vercel-secret", sensitive: true },
+                  { name: "VERCEL_TEAM_ID", value: "team-1", sensitive: false },
+                ],
+              },
+            },
+          },
+        }),
+      );
+
+      assert.deepInclude(error, {
+        operation: "validate-sandbox",
+        providerInstanceId: "sandbox:vercel",
+        environmentVariable: "VERCEL_PROJECT_ID",
+      });
+      assert.equal((yield* serverSettings.getSettings).sandbox.defaultProvider, "local");
+    }).pipe(Effect.provide(makeServerSettingsLayer())),
+  );
+
+  it.effect("rejects a sandbox secret marker without a stored secret", () =>
+    Effect.gen(function* () {
+      const serverSettings = yield* ServerSettingsModule.ServerSettingsService;
+
+      const error = yield* Effect.flip(
+        serverSettings.updateSettings({
+          sandbox: {
+            defaultProvider: "e2b",
+            providers: {
+              e2b: {
+                environment: [
+                  {
+                    name: "E2B_API_KEY",
+                    value: "",
+                    sensitive: true,
+                    valueRedacted: true,
+                  },
+                ],
+              },
+            },
+          },
+        }),
+      );
+
+      assert.deepInclude(error, {
+        operation: "validate-sandbox",
+        providerInstanceId: "sandbox:e2b",
+        environmentVariable: "E2B_API_KEY",
+      });
+    }).pipe(Effect.provide(makeServerSettingsLayer())),
+  );
+
+  it.effect("stores sandbox provider keys outside settings.json", () =>
+    Effect.gen(function* () {
+      const serverSettings = yield* ServerSettingsModule.ServerSettingsService;
+      const serverConfig = yield* ServerConfig.ServerConfig;
+      const fileSystem = yield* FileSystem.FileSystem;
+
+      const next = yield* serverSettings.updateSettings({
+        sandbox: {
+          defaultProvider: "vercel",
+          autoIdle: true,
+          providers: {
+            vercel: {
+              environment: [
+                { name: "VERCEL_TOKEN", value: "vercel-secret", sensitive: true },
+                { name: "VERCEL_TEAM_ID", value: "team-1", sensitive: false },
+                { name: "VERCEL_PROJECT_ID", value: "project-1", sensitive: false },
+              ],
+            },
+          },
+        },
+      });
+
+      assert.equal(next.sandbox.defaultProvider, "vercel");
+      assert.equal(next.sandbox.providers.vercel.environment[0]?.value, "vercel-secret");
+      assert.isTrue(next.sandbox.providers.vercel.environment[0]?.valueRedacted);
+
+      const raw = yield* fileSystem.readFileString(serverConfig.settingsPath);
+      assert.notInclude(raw, "vercel-secret");
+      assert.include(raw, "team-1");
+
+      const clientSettings = ServerSettingsModule.redactServerSettingsForClient(next);
+      assert.equal(clientSettings.sandbox.providers.vercel.environment[0]?.value, "");
+      assert.isTrue(clientSettings.sandbox.providers.vercel.environment[0]?.valueRedacted);
+
+      const roundTripped = yield* serverSettings.updateSettings({
+        sandbox: {
+          ...clientSettings.sandbox,
+          providers: {
+            ...clientSettings.sandbox.providers,
+            vercel: {
+              environment: clientSettings.sandbox.providers.vercel.environment.map((variable) =>
+                variable.name === "VERCEL_TEAM_ID" ? { ...variable, value: "team-2" } : variable,
+              ),
+            },
+          },
+        },
+      });
+
+      assert.equal(roundTripped.sandbox.providers.vercel.environment[0]?.value, "vercel-secret");
+      assert.equal(roundTripped.sandbox.providers.vercel.environment[1]?.value, "team-2");
+
+      const selected = yield* serverSettings.updateSettings({
+        sandbox: { defaultProvider: "vercel" },
+      });
+      assert.equal(selected.sandbox.defaultProvider, "vercel");
+      assert.equal(selected.sandbox.providers.vercel.environment[0]?.value, "vercel-secret");
+    }).pipe(Effect.provide(makeServerSettingsLayer())),
+  );
 });

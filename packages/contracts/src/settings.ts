@@ -20,6 +20,7 @@ import {
 } from "./preview.ts";
 import {
   ProviderInstanceConfig,
+  ProviderInstanceEnvironmentVariable,
   ProviderInstanceId,
   type ProviderDriverKind,
 } from "./providerInstance.ts";
@@ -630,6 +631,48 @@ export const BackgroundActivitySettings = Schema.Struct({
 }).pipe(Schema.withDecodingDefault(Effect.succeed({})));
 export type BackgroundActivitySettings = typeof BackgroundActivitySettings.Type;
 
+export const SandboxProvider = Schema.Literals(["local", "e2b", "daytona", "vercel", "upstash"]);
+export type SandboxProvider = typeof SandboxProvider.Type;
+export type CloudSandboxProvider = Exclude<SandboxProvider, "local">;
+
+export const CLOUD_SANDBOX_PROVIDERS = ["e2b", "daytona", "vercel", "upstash"] as const;
+export const SANDBOX_PROVIDER_CREDENTIALS = {
+  e2b: [{ name: "E2B_API_KEY", sensitive: true }],
+  daytona: [{ name: "DAYTONA_API_KEY", sensitive: true }],
+  vercel: [
+    { name: "VERCEL_TOKEN", sensitive: true },
+    { name: "VERCEL_TEAM_ID", sensitive: false },
+    { name: "VERCEL_PROJECT_ID", sensitive: false },
+  ],
+  upstash: [{ name: "UPSTASH_BOX_API_KEY", sensitive: true }],
+} as const satisfies Readonly<
+  Record<
+    CloudSandboxProvider,
+    ReadonlyArray<{ readonly name: string; readonly sensitive: boolean }>
+  >
+>;
+
+export const SandboxProviderConnection = Schema.Struct({
+  environment: Schema.Array(ProviderInstanceEnvironmentVariable).pipe(
+    Schema.withDecodingDefault(Effect.succeed([])),
+  ),
+}).pipe(Schema.withDecodingDefault(Effect.succeed({})));
+export type SandboxProviderConnection = typeof SandboxProviderConnection.Type;
+
+export const SandboxSettings = Schema.Struct({
+  defaultProvider: SandboxProvider.pipe(
+    Schema.withDecodingDefault(Effect.succeed("local" as const)),
+  ),
+  autoIdle: Schema.Literal(true).pipe(Schema.withDecodingDefault(Effect.succeed(true as const))),
+  providers: Schema.Struct({
+    e2b: SandboxProviderConnection,
+    daytona: SandboxProviderConnection,
+    vercel: SandboxProviderConnection,
+    upstash: SandboxProviderConnection,
+  }).pipe(Schema.withDecodingDefault(Effect.succeed({}))),
+}).pipe(Schema.withDecodingDefault(Effect.succeed({})));
+export type SandboxSettings = typeof SandboxSettings.Type;
+
 export const ServerSettings = Schema.Struct({
   // Legacy token-by-token assistant output. Deliberately a fresh key (was
   // `enableAssistantStreaming`): decoding drops the old key, so everyone,
@@ -715,6 +758,7 @@ export const ServerSettings = Schema.Struct({
   providerInstances: Schema.Record(ProviderInstanceId, ProviderInstanceConfig).pipe(
     Schema.withDecodingDefault(Effect.succeed({})),
   ),
+  sandbox: SandboxSettings,
   observability: ObservabilitySettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
 });
 export type ServerSettings = typeof ServerSettings.Type;
@@ -774,6 +818,7 @@ export const ServerSettingsOperation = Schema.Literals([
   "remove-secret",
   "remove-stale-secret",
   "write-secret",
+  "validate-sandbox",
   "write-file",
   "prepare-directory",
 ]);
@@ -859,6 +904,23 @@ const OpenCodeSettingsPatch = Schema.Struct({
   customModels: Schema.optionalKey(Schema.Array(Schema.String)),
 });
 
+const SandboxProviderConnectionPatch = Schema.Struct({
+  environment: Schema.optionalKey(Schema.Array(ProviderInstanceEnvironmentVariable)),
+});
+
+const SandboxSettingsPatch = Schema.Struct({
+  defaultProvider: Schema.optionalKey(SandboxProvider),
+  autoIdle: Schema.optionalKey(Schema.Literal(true)),
+  providers: Schema.optionalKey(
+    Schema.Struct({
+      e2b: Schema.optionalKey(SandboxProviderConnectionPatch),
+      daytona: Schema.optionalKey(SandboxProviderConnectionPatch),
+      vercel: Schema.optionalKey(SandboxProviderConnectionPatch),
+      upstash: Schema.optionalKey(SandboxProviderConnectionPatch),
+    }),
+  ),
+});
+
 export const ServerSettingsPatch = Schema.Struct({
   // Server settings
   enableLegacyTokenStreaming: Schema.optionalKey(Schema.Boolean),
@@ -887,6 +949,7 @@ export const ServerSettingsPatch = Schema.Struct({
     }),
   ),
   sourceControlWriterModelSelection: Schema.optionalKey(Schema.NullOr(ModelSelection)),
+  sandbox: Schema.optionalKey(SandboxSettingsPatch),
   observability: Schema.optionalKey(
     Schema.Struct({
       otlpTracesUrl: Schema.optionalKey(TrimmedString),

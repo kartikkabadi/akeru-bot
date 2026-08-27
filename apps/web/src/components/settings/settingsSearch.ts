@@ -5,6 +5,7 @@ export type SettingsPath =
   | "/settings/appearance"
   | "/settings/keybindings"
   | "/settings/providers"
+  | "/settings/sandbox"
   | "/settings/integrations"
   | "/settings/source-control"
   | "/settings/connections"
@@ -29,6 +30,7 @@ export const SETTINGS_SECTION_LABELS: Readonly<Record<SettingsPath, string>> = {
   "/settings/appearance": "Appearance",
   "/settings/keybindings": "Keybindings",
   "/settings/providers": "Providers",
+  "/settings/sandbox": "Sandbox",
   "/settings/integrations": "Integrations",
   "/settings/source-control": "Source Control",
   "/settings/connections": "Connections",
@@ -212,6 +214,23 @@ export const SETTINGS_SEARCH_ITEMS = [
     id: "providers",
     title: "Providers",
     to: "/settings/providers",
+  },
+  {
+    id: "sandbox",
+    title: "Sandbox",
+    to: "/settings/sandbox",
+  },
+  {
+    id: "default-sandbox",
+    title: "Default sandbox",
+    to: "/settings/sandbox",
+    targetId: "sandbox",
+  },
+  {
+    id: "sandbox-auto-idle",
+    title: "Sandbox auto-idle",
+    to: "/settings/sandbox",
+    targetId: "sandbox",
   },
   {
     id: "agent-browser-access",

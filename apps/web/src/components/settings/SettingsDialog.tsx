@@ -3,6 +3,7 @@ import {
   KeyboardIcon,
   Link02Icon,
   PaintBrush01Icon,
+  ServerIcon,
   Settings02Icon,
 } from "@hugeicons/core-free-icons";
 import type { IconSvgElement } from "@hugeicons/react";
@@ -23,6 +24,9 @@ const AppearanceSettingsPanel = lazy(async () => ({
 const ProvidersPanel = lazy(async () => ({
   default: (await import("./ProvidersPanel")).ProvidersPanel,
 }));
+const SandboxSettingsPanel = lazy(async () => ({
+  default: (await import("./SandboxSettingsPanel")).SandboxSettingsPanel,
+}));
 const ConnectionsSettings = lazy(async () => ({
   default: (await import("./ConnectionsSettings")).ConnectionsSettings,
 }));
@@ -40,6 +44,7 @@ const SECTION_PANELS: Readonly<Record<SettingsSection, ComponentType>> = {
   general: GeneralSettingsPanel,
   appearance: AppearanceSettingsPanel,
   providers: ProvidersPanel,
+  sandbox: SandboxSettingsPanel,
   connections: ConnectionsSettings,
   keybindings: KeybindingsSettingsPanel,
   "source-control": SourceControlSettingsPanel,
@@ -55,6 +60,7 @@ const NAV_ITEMS: ReadonlyArray<{
   { section: "general", label: "General", icon: Settings02Icon },
   { section: "appearance", label: "Appearance", icon: PaintBrush01Icon },
   { section: "providers", label: "Providers", icon: BotIcon },
+  { section: "sandbox", label: "Sandbox", icon: ServerIcon },
   { section: "connections", label: "Connections", icon: Link02Icon },
   { section: "keybindings", label: "Keybindings", icon: KeyboardIcon },
 ];

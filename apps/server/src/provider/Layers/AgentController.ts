@@ -4,6 +4,7 @@ import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
 
 import { AuthStorage } from "@mastra/code-sdk/auth/storage";
+import { TOOL_NAME_OVERRIDES } from "@mastra/code-sdk/tool-names";
 import {
   createMcpManager,
   type McpManager,
@@ -16,6 +17,7 @@ import type {
 } from "@mastra/core/agent-controller";
 import { Workspace } from "@mastra/core/workspace";
 import {
+  DEFAULT_SERVER_SETTINGS,
   EventId,
   ProviderDriverKind,
   ProviderInstanceId,
@@ -31,6 +33,7 @@ import {
   type ThreadId,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
+import * as Equal from "effect/Equal";
 import * as Layer from "effect/Layer";
 import * as PubSub from "effect/PubSub";
 import * as Semaphore from "effect/Semaphore";
@@ -44,7 +47,12 @@ import {
   type AkeruMastraHarnessOptions,
   type AkeruMastraSession,
 } from "../AkeruMastraHarness.ts";
-import { createBotWorkspace, type CreateRemoteBotWorkspaceInput } from "../botWorkspace.ts";
+import {
+  createBotWorkspace,
+  sandboxSessionIdentity,
+  type BotWorkspaceIdentity,
+  type CreateRemoteBotWorkspaceInput,
+} from "../botWorkspace.ts";
 import { AgentControllerRuntimeError, AgentControllerUnsupportedEngineError } from "../Errors.ts";
 import { AgentController, type AgentControllerShape } from "../Services/AgentController.ts";
 import { LegacyProviderBridge } from "../Services/LegacyProviderBridge.ts";
@@ -83,6 +91,9 @@ interface ActiveSession {
   status: ProviderSession["status"];
   activeTurn: ActiveTurn | null;
   readonly toolNames: Map<string, string>;
+  readonly sensitiveToolCalls: Set<string>;
+  readonly localComputer: boolean;
+  readonly sandboxIdentity: BotWorkspaceIdentity;
   readonly unsubscribe: () => void;
 }
 
@@ -149,15 +160,46 @@ export function toMcpServerConfigs(servers: readonly McpServer[]): Record<string
 function permissionPolicy(
   runtimeMode: RuntimeMode,
   category: "read" | "edit" | "execute" | "mcp" | "other",
+  localComputer: boolean,
 ): "allow" | "ask" {
+  if (localComputer && (category === "edit" || category === "execute")) return "ask";
   if (runtimeMode === "full-access" || runtimeMode === "auto") return "allow";
   if (category === "read") return "allow";
   if (runtimeMode === "auto-accept-edits" && category === "edit") return "allow";
   return "ask";
 }
 
+export function isSensitiveActionToolName(toolName: string): boolean {
+  const normalized = toolName.replace(/([a-z0-9])([A-Z])/g, "$1_$2");
+  return /(^|[_:./-])(send|pay|payment|payments|delete|remove|prod|production|secret|secrets|credential|credentials)(?=$|[_:./-])/i.test(
+    normalized,
+  );
+}
+
+function commandText(args: unknown): string {
+  if (typeof args !== "object" || args === null || !("command" in args)) return "";
+  return typeof args.command === "string" ? args.command.trim() : "";
+}
+
+function isAutoApprovableCloudCommand(command: string): boolean {
+  if (command.length === 0 || /[;&|`$()<>\n]/.test(command)) return false;
+  const [executable = ""] = command.split(/\s+/);
+  const name = executable.split("/").at(-1)?.toLowerCase() ?? "";
+  return ["pwd", "ls", "mkdir", "touch"].includes(name);
+}
+
+export function isSensitiveActionToolInvocation(toolName: string, args: unknown): boolean {
+  if (isSensitiveActionToolName(toolName)) return true;
+  if (toolName !== "execute_command") return false;
+  return !isAutoApprovableCloudCommand(commandText(args));
+}
+
 function usesMastraCode(provider: ProviderDriverKind): boolean {
-  return String(provider) === "codex";
+  return (
+    String(provider) === "codex" ||
+    String(provider) === "claudeAgent" ||
+    String(provider) === "grok"
+  );
 }
 
 function itemType(
@@ -393,6 +435,15 @@ const make = (options?: AgentControllerLiveOptions) =>
         case "tool_approval_required":
           if (!turn) return;
           active.toolNames.set(event.toolCallId, event.toolName);
+          const sensitiveAction = isSensitiveActionToolInvocation(event.toolName, event.args);
+          if (sensitiveAction) active.sensitiveToolCalls.add(event.toolCallId);
+          if (!active.localComputer && event.toolName === "execute_command" && !sensitiveAction) {
+            active.session.respondToToolApproval({
+              toolCallId: event.toolCallId,
+              decision: "approve",
+            });
+            return;
+          }
           turn.waiting = true;
           publishSessionState(threadId, active, "waiting");
           publish({
@@ -541,8 +592,13 @@ const make = (options?: AgentControllerLiveOptions) =>
       "AgentController.startSession",
     )(function* (threadId, input) {
       const key = String(threadId);
+      const sandboxSettings = input.sandboxSettings ?? DEFAULT_SERVER_SETTINGS.sandbox;
+      const sandboxIdentity = sandboxSessionIdentity(sandboxSettings);
       const existing = sessions.get(key);
-      if (existing) return toProviderSession(threadId, existing);
+      if (existing && Equal.equals(existing.sandboxIdentity, sandboxIdentity)) {
+        return toProviderSession(threadId, existing);
+      }
+      if (existing) yield* stopSession({ threadId });
       const resolved = resolvedByThread.get(key);
       if (!resolved) {
         return yield* new AgentControllerRuntimeError({
@@ -566,8 +622,8 @@ const make = (options?: AgentControllerLiveOptions) =>
       const workspace = yield* runMastra("workspace.create", () =>
         createBotWorkspace({
           threadId: key,
-          cwd: input.cwd,
-          sandbox: input.botSandbox,
+          ...(input.cwd ? { cwd: input.cwd } : {}),
+          settings: sandboxSettings,
           ...(options?.makeRemoteWorkspace
             ? { makeRemoteWorkspace: options.makeRemoteWorkspace }
             : {}),
@@ -591,7 +647,8 @@ const make = (options?: AgentControllerLiveOptions) =>
       yield* runMastra("state.set", () =>
         session.state.set({
           ...(input.cwd ? { projectPath: input.cwd } : {}),
-          yolo: input.runtimeMode === "full-access" || input.runtimeMode === "auto",
+          // Category and per-tool policies remain authoritative in every runtime mode.
+          yolo: false,
         }),
       );
       yield* runMastra("model.switch", () =>
@@ -601,14 +658,27 @@ const make = (options?: AgentControllerLiveOptions) =>
       if (session.mode.get() !== modeId) {
         yield* runMastra("mode.switch", () => session.mode.switch({ modeId }));
       }
+      const localComputer = sandboxSettings.defaultProvider === "local";
       yield* Effect.forEach(
         ["read", "edit", "execute", "mcp", "other"] as const,
         (category) =>
           runMastra("permissions.setForCategory", () =>
             session.permissions.setForCategory({
               category,
-              policy: permissionPolicy(input.runtimeMode, category),
+              policy: permissionPolicy(input.runtimeMode, category, localComputer),
             }),
+          ),
+        { discard: true },
+      );
+      const controllerToolNames = Object.values(TOOL_NAME_OVERRIDES).map(({ name }) => name);
+      const mcpToolNames = Object.keys(mcpManagers.get(key)?.getTools() ?? {});
+      yield* Effect.forEach(
+        [...controllerToolNames, ...mcpToolNames].filter(
+          (toolName) => toolName === "execute_command" || isSensitiveActionToolName(toolName),
+        ),
+        (toolName) =>
+          runMastra("permissions.setForTool", () =>
+            session.permissions.setForTool({ toolName, policy: "ask" }),
           ),
         { discard: true },
       );
@@ -625,6 +695,9 @@ const make = (options?: AgentControllerLiveOptions) =>
         status: "ready" as const,
         activeTurn: null,
         toolNames: new Map<string, string>(),
+        sensitiveToolCalls: new Set<string>(),
+        localComputer,
+        sandboxIdentity,
       };
       const unsubscribe = session.subscribe((event) => {
         const active = sessions.get(key);
@@ -763,7 +836,15 @@ const make = (options?: AgentControllerLiveOptions) =>
       }
       const toolCallId = String(input.requestId);
       const toolName = active.toolNames.get(toolCallId);
-      if (input.decision === "acceptForSession" && toolName) {
+      const sensitiveAction =
+        active.sensitiveToolCalls.has(toolCallId) ||
+        (toolName ? isSensitiveActionToolName(toolName) : false);
+      if (
+        input.decision === "acceptForSession" &&
+        toolName &&
+        toolName !== "execute_command" &&
+        !sensitiveAction
+      ) {
         yield* runMastra("permissions.setForTool", () =>
           active.session.permissions.setForTool({ toolName, policy: "allow" }),
         );
@@ -771,8 +852,9 @@ const make = (options?: AgentControllerLiveOptions) =>
       if (active.activeTurn) active.activeTurn.waiting = false;
       active.session.respondToToolApproval({
         toolCallId,
-        decision: approvalDecision(input.decision),
+        decision: approvalDecision(input.decision, sensitiveAction),
       });
+      active.sensitiveToolCalls.delete(toolCallId);
       publish({
         ...baseEvent(input.threadId, active, active.activeTurn?.turnId),
         requestId: RuntimeRequestId.make(toolCallId),
@@ -900,9 +982,10 @@ function ThreadIdBrand(value: string): ThreadId {
 
 function approvalDecision(
   decision: ProviderApprovalDecision,
+  sensitiveAction: boolean,
 ): "approve" | "decline" | "always_allow_category" {
   if (decision === "decline" || decision === "cancel") return "decline";
-  if (decision === "acceptAlways") return "always_allow_category";
+  if (decision === "acceptAlways" && !sensitiveAction) return "always_allow_category";
   return "approve";
 }
 

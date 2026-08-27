@@ -16,6 +16,7 @@ import {
   BotId,
   CommandId,
   DEFAULT_PROVIDER_INTERACTION_MODE,
+  DEFAULT_SERVER_SETTINGS,
   EventId,
   MessageId,
   ProjectId,
@@ -110,7 +111,10 @@ describe("ProviderCommandReactor", () => {
     );
   });
   let runtime: ManagedRuntime.ManagedRuntime<
-    OrchestrationEngineService | ProviderCommandReactor | ProjectionSnapshotQuery,
+    | OrchestrationEngineService
+    | ProviderCommandReactor
+    | ProjectionSnapshotQuery
+    | ServerSettingsService,
     unknown
   > | null = null;
   let scope: Scope.Closeable | null = null;
@@ -479,6 +483,7 @@ describe("ProviderCommandReactor", () => {
     const engine = await runtime.runPromise(Effect.service(OrchestrationEngineService));
     const snapshotQuery = await runtime.runPromise(Effect.service(ProjectionSnapshotQuery));
     const reactor = await runtime.runPromise(Effect.service(ProviderCommandReactor));
+    const serverSettings = await runtime.runPromise(Effect.service(ServerSettingsService));
     const runEffect = <A, E>(effect: Effect.Effect<A, E>) => runtime!.runPromise(effect);
 
     await Effect.runPromise(
@@ -583,6 +588,7 @@ describe("ProviderCommandReactor", () => {
       generateBranchName,
       generateThreadTitle,
       runtimeSessions,
+      serverSettings,
       stateDir,
       drain,
       runEffect,
@@ -632,7 +638,7 @@ describe("ProviderCommandReactor", () => {
         model: "gpt-5-codex",
       },
       mcpServers: [],
-      botSandbox: null,
+      sandboxSettings: DEFAULT_SERVER_SETTINGS.sandbox,
       runtimeMode: "approval-required",
     });
 
@@ -683,7 +689,7 @@ describe("ProviderCommandReactor", () => {
         instanceId: ProviderInstanceId.make("claudeAgent"),
         model: "claude-fable-5",
       },
-      botSandbox: "local",
+      sandboxSettings: DEFAULT_SERVER_SETTINGS.sandbox,
     });
   });
 
@@ -2527,6 +2533,75 @@ describe("ProviderCommandReactor", () => {
     const thread = readModel.threads.find((entry) => entry.id === ThreadId.make("thread-1"));
     expect(thread?.session?.threadId).toBe("thread-1");
     expect(thread?.session?.runtimeMode).toBe("full-access");
+  });
+
+  it("restarts the session when the selected sandbox changes", async () => {
+    const harness = await createHarness();
+    const now = "2026-01-01T00:00:00.000Z";
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.make("cmd-turn-start-sandbox-switch-1"),
+        threadId: ThreadId.make("thread-1"),
+        message: {
+          messageId: asMessageId("user-message-sandbox-switch-1"),
+          role: "user",
+          text: "first",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: now,
+      }),
+    );
+
+    await waitFor(() => harness.startSession.mock.calls.length === 1);
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+    await Effect.runPromise(
+      harness.serverSettings.updateSettings({
+        sandbox: {
+          defaultProvider: "e2b",
+          providers: {
+            e2b: {
+              environment: [{ name: "E2B_API_KEY", value: "e2b-key", sensitive: true }],
+            },
+          },
+        },
+      }),
+    );
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.make("cmd-turn-start-sandbox-switch-2"),
+        threadId: ThreadId.make("thread-1"),
+        message: {
+          messageId: asMessageId("user-message-sandbox-switch-2"),
+          role: "user",
+          text: "second",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: now,
+      }),
+    );
+
+    await waitFor(() => harness.startSession.mock.calls.length === 2);
+    await waitFor(() => harness.sendTurn.mock.calls.length === 2);
+
+    expect(harness.stopSession).toHaveBeenCalledOnce();
+    expect(harness.startSession.mock.calls[1]?.[1]).toMatchObject({
+      sandboxSettings: {
+        defaultProvider: "e2b",
+        providers: {
+          e2b: {
+            environment: [{ name: "E2B_API_KEY", value: "e2b-key", sensitive: true }],
+          },
+        },
+      },
+    });
   });
 
   it("restarts the session when a turn changes provider", async () => {

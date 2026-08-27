@@ -24,14 +24,7 @@ function BotThreadRouteView() {
         <BotDetailsPanel
           key={bot.id}
           bot={bot}
-          onSaveBot={async ({
-            name,
-            label,
-            description,
-            engine,
-            sandbox,
-            disabledMcpServerIds,
-          }) => {
+          onSaveBot={async ({ name, label, description, engine, disabledMcpServerIds }) => {
             if (!environmentId) return false;
             const result = await updateBot({
               environmentId,
@@ -41,7 +34,6 @@ function BotThreadRouteView() {
                 label,
                 description,
                 engine,
-                sandbox,
                 disabledMcpServerIds,
               },
             });

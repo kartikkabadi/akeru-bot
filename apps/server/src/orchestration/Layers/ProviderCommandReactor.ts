@@ -37,6 +37,7 @@ import {
 import type { AgentControllerError } from "../../provider/Errors.ts";
 import { TextGeneration } from "../../textGeneration/TextGeneration.ts";
 import { AgentController } from "../../provider/Services/AgentController.ts";
+import { sandboxSessionIdentity, type BotWorkspaceIdentity } from "../../provider/botWorkspace.ts";
 import { ProviderRegistry } from "../../provider/Services/ProviderRegistry.ts";
 import { ProjectionBotRepository } from "../../persistence/Services/ProjectionBots.ts";
 import { ProjectionMcpServerRepository } from "../../persistence/Services/ProjectionMcpServers.ts";
@@ -343,6 +344,7 @@ const make = Effect.gen(function* () {
     );
 
   const threadModelSelections = new Map<string, ModelSelection>();
+  const threadSandboxIdentities = new Map<string, BotWorkspaceIdentity>();
 
   const appendProviderFailureActivity = (input: {
     readonly threadId: ThreadId;
@@ -672,13 +674,7 @@ const make = Effect.gen(function* () {
     const providerChanged = currentInfo.driverKind !== desiredInfo.driverKind;
     const project = yield* resolveProject(thread.projectId);
     const mcpServers = yield* resolveControllerMcpServers(thread);
-    const respondingBotId = resolveControllerBotId(thread);
-    const respondingBot =
-      respondingBotId === null
-        ? undefined
-        : yield* projectionBotRepository
-            .getById({ botId: respondingBotId })
-            .pipe(Effect.map(Option.getOrUndefined));
+    const sandboxSettings = (yield* serverSettingsService.getSettings).sandbox;
     const effectiveCwd = resolveThreadWorkspaceCwd({
       thread,
       projects: project ? [project] : [],
@@ -696,7 +692,7 @@ const make = Effect.gen(function* () {
         ...(thread.title ? { title: thread.title } : {}),
         modelSelection: desiredModelSelection,
         mcpServers,
-        botSandbox: respondingBot?.sandbox ?? null,
+        sandboxSettings,
         ...(input?.resumeCursor !== undefined ? { resumeCursor: input.resumeCursor } : {}),
         runtimeMode: desiredRuntimeMode,
       });
@@ -752,6 +748,15 @@ const make = Effect.gen(function* () {
         activeSession?.mcpServerIds ?? [],
         mcpServers.map((server) => server.id),
       );
+      const sandboxIdentity = sandboxSessionIdentity(sandboxSettings);
+      const previousSandboxIdentity = threadSandboxIdentities.get(threadId);
+      const usesSandboxWorkspace = ["codex", "claudeAgent", "grok"].includes(
+        String(preferredProvider),
+      );
+      const sandboxSettingsChanged =
+        usesSandboxWorkspace &&
+        previousSandboxIdentity !== undefined &&
+        !Equal.equals(previousSandboxIdentity, sandboxIdentity);
 
       if (
         !runtimeModeChanged &&
@@ -759,13 +764,15 @@ const make = Effect.gen(function* () {
         !instanceChanged &&
         !shouldRestartForModelChange &&
         !shouldRestartForModelSelectionChange &&
-        !mcpServersChanged
+        !mcpServersChanged &&
+        !sandboxSettingsChanged
       ) {
+        threadSandboxIdentities.set(threadId, sandboxIdentity);
         return { threadId: existingSessionThreadId, engine: desiredEngine };
       }
 
       const resumeCursor =
-        shouldRestartForModelChange || providerChanged
+        shouldRestartForModelChange || providerChanged || sandboxSettingsChanged
           ? undefined
           : (activeSession?.resumeCursor ?? undefined);
       yield* Effect.logInfo("provider command reactor restarting provider session", {
@@ -787,9 +794,10 @@ const make = Effect.gen(function* () {
         shouldRestartForModelChange,
         shouldRestartForModelSelectionChange,
         mcpServersChanged,
+        sandboxSettingsChanged,
         hasResumeCursor: resumeCursor !== undefined,
       });
-      if (mcpServersChanged || providerChanged) {
+      if (mcpServersChanged || providerChanged || sandboxSettingsChanged) {
         yield* agentController.stopSession({ threadId });
       }
       const restartedSession = yield* startProviderSession(
@@ -804,11 +812,13 @@ const make = Effect.gen(function* () {
         cwd: restartedSession.cwd,
       });
       yield* bindSessionToThread(restartedSession);
+      threadSandboxIdentities.set(threadId, sandboxIdentity);
       return { threadId: restartedSession.threadId, engine: desiredEngine };
     }
 
     const startedSession = yield* startProviderSession(undefined);
     yield* bindSessionToThread(startedSession);
+    threadSandboxIdentities.set(threadId, sandboxSessionIdentity(sandboxSettings));
     return { threadId: startedSession.threadId, engine: desiredEngine };
   });
 

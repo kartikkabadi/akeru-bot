@@ -13,7 +13,7 @@ memoryLayer()("Akeru projection migration slots", (it) => {
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
 
-      assert.deepEqual(migrationManifest.slice(-8), [
+      assert.deepEqual(migrationManifest.slice(-9), [
         [45, "ProjectionBotsAndGroups"],
         [46, "ProjectionThreadOwnership"],
         [47, "ProjectionMcpServers"],
@@ -22,6 +22,7 @@ memoryLayer()("Akeru projection migration slots", (it) => {
         [50, "BotProfileMetadata"],
         [51, "BotDisabledMcpServers"],
         [52, "ExecutorPluginCommand"],
+        [53, "RemoveAkeruCloudSandbox"],
       ]);
 
       yield* runMigrations({ toMigrationInclusive: 45 });
@@ -32,8 +33,18 @@ memoryLayer()("Akeru projection migration slots", (it) => {
         ) VALUES (
           'bot-from-045', 'Akeru', 'Generalist',
           '{"kind":"blob","shape":"circle","color":"#5B7FD4"}',
-          NULL, NULL, NULL, NULL,
+          NULL, 'akeru-cloud', NULL, NULL,
           '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z'
+        )
+      `;
+      yield* sql`
+        INSERT INTO orchestration_events (
+          event_id, aggregate_kind, stream_id, stream_version, event_type,
+          occurred_at, actor_kind, payload_json, metadata_json
+        ) VALUES (
+          'event-bot-created', 'bot', 'bot-from-045', 1, 'bot.created',
+          '2026-01-01T00:00:00.000Z', 'user',
+          '{"botId":"bot-from-045","sandbox":"akeru-cloud"}', '{}'
         )
       `;
 
@@ -53,16 +64,25 @@ memoryLayer()("Akeru projection migration slots", (it) => {
         readonly botId: string;
         readonly runtimeMode: string;
         readonly usageCap: string | null;
+        readonly sandbox: string | null;
       }>`
         SELECT
           bot_id AS "botId",
           runtime_mode AS "runtimeMode",
-          usage_cap_json AS "usageCap"
+          usage_cap_json AS "usageCap",
+          sandbox
         FROM projection_bots
       `;
       assert.deepEqual(bots, [
-        { botId: "bot-from-045", runtimeMode: "full-access", usageCap: null },
+        { botId: "bot-from-045", runtimeMode: "full-access", usageCap: null, sandbox: "local" },
       ]);
+
+      const events = yield* sql<{ readonly sandbox: string | null }>`
+        SELECT json_extract(payload_json, '$.sandbox') AS sandbox
+        FROM orchestration_events
+        WHERE event_id = 'event-bot-created'
+      `;
+      assert.deepEqual(events, [{ sandbox: "local" }]);
 
       const profile = yield* sql<{
         readonly label: string | null;

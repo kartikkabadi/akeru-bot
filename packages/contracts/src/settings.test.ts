@@ -162,6 +162,49 @@ describe("ClientSettings sidebar", () => {
   });
 });
 
+describe("ServerSettings sandbox", () => {
+  it("defaults to this computer with auto-idle on", () => {
+    expect(DEFAULT_SERVER_SETTINGS.sandbox).toEqual({
+      defaultProvider: "local",
+      autoIdle: true,
+      providers: {
+        e2b: { environment: [] },
+        daytona: { environment: [] },
+        vercel: { environment: [] },
+        upstash: { environment: [] },
+      },
+    });
+  });
+
+  it.each(["local", "e2b", "daytona", "vercel", "upstash"] as const)(
+    "accepts %s as the default sandbox",
+    (defaultProvider) => {
+      expect(
+        decodeServerSettingsPatch({
+          sandbox: {
+            defaultProvider,
+            autoIdle: true,
+            providers: {},
+          },
+        }).sandbox?.defaultProvider,
+      ).toBe(defaultProvider);
+    },
+  );
+
+  it("keeps auto-idle on and rejects the removed hosted alias", () => {
+    expect(() =>
+      decodeServerSettingsPatch({
+        sandbox: { defaultProvider: "local", autoIdle: false, providers: {} },
+      }),
+    ).toThrow();
+    expect(() =>
+      decodeServerSettingsPatch({
+        sandbox: { defaultProvider: "akeru-cloud", autoIdle: true, providers: {} },
+      }),
+    ).toThrow();
+  });
+});
+
 describe("ServerSettings.providerInstances (slice-2 invariant)", () => {
   it("defaults text generation to Luna at low reasoning effort", () => {
     expect(DEFAULT_SERVER_SETTINGS.textGenerationModelSelection).toEqual({

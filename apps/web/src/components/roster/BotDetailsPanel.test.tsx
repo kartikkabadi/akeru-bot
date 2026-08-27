@@ -35,8 +35,8 @@ describe("BotDetailsPanel", () => {
     expect(markup).toContain('aria-label="Bot label"');
     expect(markup).toContain('aria-label="Bot description"');
     expect(markup).toContain("Connect a provider");
-    expect(markup).toContain(">Sandbox</div>");
-    expect(markup).toContain('aria-label="Sandbox provider"');
+    expect(markup).not.toContain(">Sandbox</div>");
+    expect(markup).not.toContain('aria-label="Sandbox provider"');
     expect(markup).toContain(">Tools</div>");
     expect(markup).toContain("No workspace tools");
     expect(markup).toContain(">Manage</span>");
@@ -98,8 +98,8 @@ describe("BotDetailsPanel", () => {
     );
     expect(source).toContain("<BotDetailsPanel");
     expect(source).toContain("onSaveBot=");
-    expect(source).toContain("label, description, engine, sandbox, disabledMcpServerIds");
-    expect(source).toContain("sandbox,");
+    expect(source).toContain("label, description, engine, disabledMcpServerIds");
+    expect(source).not.toContain("sandbox,");
     expect(source).toContain("disabledMcpServerIds,");
     expect(source).not.toContain("RightPanelTabs");
     expect(source).not.toContain("ThreadTerminalDrawer");

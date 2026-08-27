@@ -13,6 +13,7 @@ export const SETTINGS_SECTIONS = [
   "general",
   "appearance",
   "providers",
+  "sandbox",
   "connections",
   "keybindings",
   "source-control",

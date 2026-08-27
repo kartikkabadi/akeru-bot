@@ -14,12 +14,16 @@ import {
   DEFAULT_TEXT_GENERATION_MODEL,
   DEFAULT_TEXT_GENERATION_MODEL_BY_PROVIDER,
   DEFAULT_MODEL_BY_PROVIDER,
+  type CloudSandboxProvider,
+  CLOUD_SANDBOX_PROVIDERS,
   DEFAULT_SERVER_SETTINGS,
   type ModelSelection,
   type ProviderInstanceConfig,
   type ProviderInstanceEnvironmentVariable,
   ProviderDriverKind,
   ProviderInstanceId,
+  type SandboxProviderConnection,
+  SANDBOX_PROVIDER_CREDENTIALS,
   ServerSettings,
   ServerSettingsError,
   type ServerSettingsPatch,
@@ -133,6 +137,13 @@ function providerEnvironmentSecretName(input: {
   return `provider-env-${Buffer.from(input.instanceId, "utf8").toString("base64url")}-${Buffer.from(input.name, "utf8").toString("base64url")}`;
 }
 
+function sandboxEnvironmentSecretName(input: {
+  readonly provider: CloudSandboxProvider;
+  readonly name: string;
+}): string {
+  return `sandbox-env-${input.provider}-${Buffer.from(input.name, "utf8").toString("base64url")}`;
+}
+
 function redactProviderEnvironmentVariable(
   variable: ProviderInstanceEnvironmentVariable,
 ): ProviderInstanceEnvironmentVariable {
@@ -144,6 +155,14 @@ function redactProviderEnvironmentVariable(
     ...variable,
     value: "",
     ...(variable.value.length > 0 || variable.valueRedacted ? { valueRedacted: true } : {}),
+  };
+}
+
+function redactSandboxProviderConnection(
+  connection: SandboxProviderConnection,
+): SandboxProviderConnection {
+  return {
+    environment: connection.environment.map(redactProviderEnvironmentVariable),
   };
 }
 
@@ -159,7 +178,19 @@ export function redactServerSettingsForClient(settings: ServerSettings): ServerS
         : instance,
     ]),
   );
-  return { ...settings, providerInstances };
+  return {
+    ...settings,
+    providerInstances,
+    sandbox: {
+      ...settings.sandbox,
+      providers: {
+        e2b: redactSandboxProviderConnection(settings.sandbox.providers.e2b),
+        daytona: redactSandboxProviderConnection(settings.sandbox.providers.daytona),
+        vercel: redactSandboxProviderConnection(settings.sandbox.providers.vercel),
+        upstash: redactSandboxProviderConnection(settings.sandbox.providers.upstash),
+      },
+    },
+  };
 }
 
 export class ServerSettingsService extends Context.Service<
@@ -518,12 +549,99 @@ const make = Effect.gen(function* () {
       };
     });
 
+  const materializeSandboxEnvironmentSecrets = (
+    settings: ServerSettings,
+  ): Effect.Effect<ServerSettings, ServerSettingsError> =>
+    Effect.gen(function* () {
+      const providers = { ...settings.sandbox.providers };
+      for (const provider of CLOUD_SANDBOX_PROVIDERS) {
+        const environment: ProviderInstanceEnvironmentVariable[] = [];
+        for (const variable of settings.sandbox.providers[provider].environment) {
+          if (!variable.sensitive || !variable.valueRedacted) {
+            environment.push(variable);
+            continue;
+          }
+          const secret = yield* secretStore
+            .get(sandboxEnvironmentSecretName({ provider, name: variable.name }))
+            .pipe(
+              Effect.mapError(
+                (cause) =>
+                  new ServerSettingsError({
+                    settingsPath,
+                    operation: "read-secret",
+                    providerInstanceId: `sandbox:${provider}`,
+                    environmentVariable: variable.name,
+                    cause,
+                  }),
+              ),
+            );
+          environment.push({
+            ...variable,
+            value: Option.isSome(secret) ? textDecoder.decode(secret.value) : "",
+          });
+        }
+        providers[provider] = { environment } satisfies SandboxProviderConnection;
+      }
+      return {
+        ...settings,
+        sandbox: { ...settings.sandbox, providers },
+      };
+    });
+
+  const validateSandboxSettings = (settings: ServerSettings) =>
+    Effect.gen(function* () {
+      for (const provider of CLOUD_SANDBOX_PROVIDERS) {
+        const environment = settings.sandbox.providers[provider].environment;
+        const credentials = SANDBOX_PROVIDER_CREDENTIALS[provider];
+        for (const credential of credentials) {
+          if (
+            credential.sensitive &&
+            environment.some(
+              (variable) => variable.name === credential.name && variable.sensitive !== true,
+            )
+          ) {
+            return yield* new ServerSettingsError({
+              settingsPath,
+              operation: "validate-sandbox",
+              providerInstanceId: `sandbox:${provider}`,
+              environmentVariable: credential.name,
+              cause: new Error("Sandbox secret credentials must be marked sensitive."),
+            });
+          }
+        }
+      }
+
+      const provider = settings.sandbox.defaultProvider;
+      if (provider === "local") return;
+      const values = new Map(
+        settings.sandbox.providers[provider].environment.map((variable) => [
+          variable.name,
+          variable.value,
+        ]),
+      );
+      for (const credential of SANDBOX_PROVIDER_CREDENTIALS[provider]) {
+        if ((values.get(credential.name) ?? "").trim().length > 0) continue;
+        return yield* new ServerSettingsError({
+          settingsPath,
+          operation: "validate-sandbox",
+          providerInstanceId: `sandbox:${provider}`,
+          environmentVariable: credential.name,
+          cause: new Error("The selected sandbox provider is missing a required credential."),
+        });
+      }
+    });
+
+  const materializeAllSecrets = (settings: ServerSettings) =>
+    materializeProviderEnvironmentSecrets(settings).pipe(
+      Effect.flatMap(materializeSandboxEnvironmentSecrets),
+    );
+
   const materializeChanges = (changes: Stream.Stream<ServerSettings>) =>
     changes.pipe(
       Stream.mapEffect((settings) =>
-        materializeProviderEnvironmentSecrets(settings).pipe(
+        materializeAllSecrets(settings).pipe(
           Effect.catch((error: ServerSettingsError) =>
-            Effect.logWarning("failed to materialize provider environment secrets", {
+            Effect.logWarning("failed to materialize settings secrets", {
               operation: error.operation,
               providerInstanceId: error.providerInstanceId,
               environmentVariable: error.environmentVariable,
@@ -636,6 +754,101 @@ const make = Effect.gen(function* () {
       };
     });
 
+  const persistSandboxEnvironmentSecrets = (
+    current: ServerSettings,
+    next: ServerSettings,
+  ): Effect.Effect<ServerSettings, ServerSettingsError> =>
+    Effect.gen(function* () {
+      const providers = { ...next.sandbox.providers };
+      const nextSecretKeys = new Set<string>();
+
+      for (const provider of CLOUD_SANDBOX_PROVIDERS) {
+        const environment: ProviderInstanceEnvironmentVariable[] = [];
+        for (const variable of next.sandbox.providers[provider].environment) {
+          const secretName = sandboxEnvironmentSecretName({ provider, name: variable.name });
+          if (!variable.sensitive) {
+            yield* secretStore.remove(secretName).pipe(
+              Effect.mapError(
+                (cause) =>
+                  new ServerSettingsError({
+                    settingsPath,
+                    operation: "remove-secret",
+                    providerInstanceId: `sandbox:${provider}`,
+                    environmentVariable: variable.name,
+                    cause,
+                  }),
+              ),
+            );
+            environment.push(redactProviderEnvironmentVariable(variable));
+            continue;
+          }
+
+          nextSecretKeys.add(secretName);
+          if (!variable.valueRedacted) {
+            if (variable.value.length > 0) {
+              yield* secretStore.set(secretName, textEncoder.encode(variable.value)).pipe(
+                Effect.mapError(
+                  (cause) =>
+                    new ServerSettingsError({
+                      settingsPath,
+                      operation: "write-secret",
+                      providerInstanceId: `sandbox:${provider}`,
+                      environmentVariable: variable.name,
+                      cause,
+                    }),
+                ),
+              );
+              environment.push({ ...variable, value: "", valueRedacted: true });
+            } else {
+              yield* secretStore.remove(secretName).pipe(
+                Effect.mapError(
+                  (cause) =>
+                    new ServerSettingsError({
+                      settingsPath,
+                      operation: "remove-secret",
+                      providerInstanceId: `sandbox:${provider}`,
+                      environmentVariable: variable.name,
+                      cause,
+                    }),
+                ),
+              );
+              const { valueRedacted: _omit, ...rest } = variable;
+              environment.push(rest);
+            }
+            continue;
+          }
+
+          environment.push(redactProviderEnvironmentVariable(variable));
+        }
+        providers[provider] = { environment } satisfies SandboxProviderConnection;
+      }
+
+      for (const provider of CLOUD_SANDBOX_PROVIDERS) {
+        for (const variable of current.sandbox.providers[provider].environment) {
+          if (!variable.sensitive) continue;
+          const secretName = sandboxEnvironmentSecretName({ provider, name: variable.name });
+          if (nextSecretKeys.has(secretName)) continue;
+          yield* secretStore.remove(secretName).pipe(
+            Effect.mapError(
+              (cause) =>
+                new ServerSettingsError({
+                  settingsPath,
+                  operation: "remove-stale-secret",
+                  providerInstanceId: `sandbox:${provider}`,
+                  environmentVariable: variable.name,
+                  cause,
+                }),
+            ),
+          );
+        }
+      }
+
+      return {
+        ...next,
+        sandbox: { ...next.sandbox, providers },
+      };
+    });
+
   const writeSettingsAtomically = Effect.fnUntraced(
     function* (settings: ServerSettings) {
       const sparseSettingsJson = yield* encodeServerSettingsJson(
@@ -732,22 +945,29 @@ const make = Effect.gen(function* () {
     start,
     ready: Deferred.await(startedDeferred),
     getSettings: getSettingsFromCache.pipe(
-      Effect.flatMap(materializeProviderEnvironmentSecrets),
+      Effect.flatMap(materializeAllSecrets),
       Effect.map(resolveTextGenerationProvider),
     ),
     updateSettings: (patch) =>
       writeSemaphore.withPermits(1)(
         Effect.gen(function* () {
           const current = yield* getSettingsFromCache;
-          const nextPersisted = yield* persistProviderEnvironmentSecrets(
+          const patched = applyServerSettingsPatch(current, patch);
+          const sandboxMaterialized = yield* materializeSandboxEnvironmentSecrets(patched);
+          yield* validateSandboxSettings(sandboxMaterialized);
+          const providerSecretsPersisted = yield* persistProviderEnvironmentSecrets(
             current,
-            applyServerSettingsPatch(current, patch),
+            patched,
           );
+          const nextPersisted = yield* persistSandboxEnvironmentSecrets(current, {
+            ...providerSecretsPersisted,
+            sandbox: sandboxMaterialized.sandbox,
+          });
           const next = yield* normalizeServerSettings(nextPersisted);
           yield* writeSettingsAtomically(next);
           yield* Cache.set(settingsCache, cacheKey, next);
           yield* emitChange(next);
-          const materialized = yield* materializeProviderEnvironmentSecrets(next);
+          const materialized = yield* materializeAllSecrets(next);
           return resolveTextGenerationProvider(materialized);
         }),
       ),

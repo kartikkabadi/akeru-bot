@@ -34,19 +34,12 @@ import { primaryServerKeybindingsAtom, primaryServerProvidersAtom } from "../../
 import { AppIcon } from "../ui/app-icon";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
-import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { Sheet, SheetClose, SheetPopup, SheetTitle } from "../ui/sheet";
 import { Textarea } from "../ui/textarea";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { AvatarPickerDialog } from "./AvatarPickerDialog";
 import { BotAvatarView } from "./BotAvatarView";
 import { BotModelPicker } from "./BotModelPicker";
-import {
-  BOT_SANDBOX_OPTIONS,
-  botSandboxChoice,
-  botSandboxLabel,
-  type BotSandboxChoice,
-} from "./botSandbox";
 import { BotToolsSheet, buildBotToolItems } from "./BotToolsSheet";
 import type { Bot } from "./types";
 
@@ -80,7 +73,6 @@ export interface BotProfileUpdate {
   readonly label: string | null;
   readonly description: string | null;
   readonly engine: BotEngine | null;
-  readonly sandbox: Bot["sandbox"];
   readonly disabledMcpServerIds: readonly McpServerId[];
 }
 
@@ -103,7 +95,6 @@ function BotProfileEditor({
   const [saved, setSaved] = useState(false);
   const [engineChanged, setEngineChanged] = useState(false);
   const [toolsOpen, setToolsOpen] = useState(false);
-  const [sandbox, setSandbox] = useState<BotSandboxChoice>(() => botSandboxChoice(bot.sandbox));
   const [disabledMcpServerIds, setDisabledMcpServerIds] = useState<readonly McpServerId[]>(
     bot.disabledMcpServerIds,
   );
@@ -147,7 +138,6 @@ function BotProfileEditor({
   const normalizedLabel = label.trim() || null;
   const normalizedDescription = description.trim() || null;
   const nextEngine: Bot["engine"] = engineChanged && model ? { provider, model } : bot.engine;
-  const nextSandbox: Bot["sandbox"] = sandbox;
   const tools = useMemo(() => buildBotToolItems(mcpServers), [mcpServers]);
   const enabledToolCount = tools.filter(
     (tool) => tool.workspaceEnabled && !disabledMcpServerIds.includes(tool.id),
@@ -155,13 +145,11 @@ function BotProfileEditor({
   const toolOverridesDirty =
     [...disabledMcpServerIds].sort().join("\u0000") !==
     [...bot.disabledMcpServerIds].sort().join("\u0000");
-  const sandboxDirty = sandbox !== botSandboxChoice(bot.sandbox);
   const dirty =
     name.trim() !== bot.name ||
     normalizedLabel !== bot.label ||
     normalizedDescription !== bot.description ||
     engineChanged ||
-    sandboxDirty ||
     toolOverridesDirty;
 
   const markChanged = () => setSaved(false);
@@ -248,30 +236,6 @@ function BotProfileEditor({
         </div>
 
         <div className="space-y-2">
-          <div className="text-sm font-medium">Sandbox</div>
-          <Select
-            value={sandbox}
-            onValueChange={(value) => {
-              if (value === null) return;
-              if (!BOT_SANDBOX_OPTIONS.some((option) => option.value === value)) return;
-              setSandbox(value as BotSandboxChoice);
-              markChanged();
-            }}
-          >
-            <SelectTrigger className="w-full bg-muted/20" aria-label="Sandbox provider">
-              <SelectValue>{botSandboxLabel(sandbox)}</SelectValue>
-            </SelectTrigger>
-            <SelectPopup>
-              {BOT_SANDBOX_OPTIONS.map((option) => (
-                <SelectItem key={option.value} value={option.value}>
-                  {option.label}
-                </SelectItem>
-              ))}
-            </SelectPopup>
-          </Select>
-        </div>
-
-        <div className="space-y-2">
           <div className="text-sm font-medium">Tools</div>
           <button
             type="button"
@@ -304,7 +268,6 @@ function BotProfileEditor({
               label: normalizedLabel,
               description: normalizedDescription,
               engine: nextEngine,
-              sandbox: nextSandbox,
               disabledMcpServerIds,
             }).then((success) => {
               setSaving(false);

@@ -8,6 +8,7 @@ import type { AgentControllerEvent, MastraDBMessage, Session } from "@mastra/cor
 import { LocalFilesystem, LocalSandbox, Workspace } from "@mastra/core/workspace";
 import {
   ApprovalRequestId,
+  DEFAULT_SERVER_SETTINGS,
   McpServerId,
   ProviderDriverKind,
   ProviderInstanceId,
@@ -24,11 +25,14 @@ import * as Stream from "effect/Stream";
 import { assert, describe, expect, vi } from "vite-plus/test";
 
 import { ServerConfig } from "../../config.ts";
+import type { CreateRemoteBotWorkspaceInput } from "../botWorkspace.ts";
 import { AgentController } from "../Services/AgentController.ts";
 import { LegacyProviderBridge } from "../Services/LegacyProviderBridge.ts";
 import type { ProviderServiceShape } from "../Services/ProviderService.ts";
 import {
   createAkeruMastraAuthStorage,
+  isSensitiveActionToolInvocation,
+  isSensitiveActionToolName,
   makeAgentControllerLive,
   toMcpServerConfigs,
   type AgentControllerLiveOptions,
@@ -155,7 +159,7 @@ function makeMastraHarness() {
     respondToToolApproval: vi.fn(),
     respondToToolSuspension: vi.fn(async () => undefined),
   } as unknown as Session<Record<string, unknown>>;
-  const createSession = vi.fn(async () => session as never);
+  const createSession = vi.fn(async (_input: unknown) => session as never);
   const deleteSession = vi.fn(async () => true);
   const destroy = vi.fn(async () => undefined);
   const factory: NonNullable<AgentControllerLiveOptions["makeMastraHarness"]> = async (options) => {
@@ -274,6 +278,51 @@ describe("toMcpServerConfigs", () => {
   });
 });
 
+describe("sensitive action tools", () => {
+  it("matches send, pay, delete, production, and secret actions", () => {
+    for (const toolName of [
+      "send_email",
+      "payInvoice",
+      "delete_file",
+      "deploy-production",
+      "read_secret",
+      "updateCredentials",
+    ]) {
+      expect(isSensitiveActionToolName(toolName)).toBe(true);
+    }
+    expect(isSensitiveActionToolName("read_file")).toBe(false);
+    expect(isSensitiveActionToolName("search_content")).toBe(false);
+    expect(isSensitiveActionToolInvocation("execute_command", { command: "ls -la" })).toBe(false);
+    expect(isSensitiveActionToolInvocation("execute_command", { command: "mkdir build" })).toBe(
+      false,
+    );
+    expect(isSensitiveActionToolInvocation("execute_command", { command: "git add ." })).toBe(true);
+    expect(isSensitiveActionToolInvocation("execute_command", { command: "rm -rf build" })).toBe(
+      true,
+    );
+    expect(
+      isSensitiveActionToolInvocation("execute_command", {
+        command: "python -c \"import os; os.remove('old.txt')\"",
+      }),
+    ).toBe(true);
+    expect(
+      isSensitiveActionToolInvocation("execute_command", { command: "terraform destroy" }),
+    ).toBe(true);
+    expect(isSensitiveActionToolInvocation("execute_command", { command: "cat ~/.env" })).toBe(
+      true,
+    );
+    expect(isSensitiveActionToolInvocation("execute_command", { command: "rg . .env" })).toBe(true);
+    expect(
+      isSensitiveActionToolInvocation("execute_command", {
+        command: "deploy --environment production",
+      }),
+    ).toBe(true);
+    expect(
+      isSensitiveActionToolInvocation("execute_command", { command: "printenv API_KEY" }),
+    ).toBe(true);
+  });
+});
+
 describe("AgentControllerLive", () => {
   it.effect("reads Akeru subscription credentials through Mastra AuthStorage", () =>
     Effect.gen(function* () {
@@ -376,6 +425,21 @@ describe("AgentControllerLive", () => {
           runtimeMode: "full-access",
         });
         assert.equal(session.provider, "codex");
+        expect(mastra.session.state.set).toHaveBeenCalledWith(
+          expect.objectContaining({ yolo: false }),
+        );
+        expect(mastra.session.permissions.setForCategory).toHaveBeenCalledWith({
+          category: "edit",
+          policy: "ask",
+        });
+        expect(mastra.session.permissions.setForCategory).toHaveBeenCalledWith({
+          category: "execute",
+          policy: "ask",
+        });
+        expect(mastra.session.permissions.setForTool).toHaveBeenCalledWith({
+          toolName: "delete_file",
+          policy: "ask",
+        });
 
         const events: ProviderRuntimeEvent[] = [];
         const eventsFiber = yield* controller.streamEvents.pipe(
@@ -473,6 +537,94 @@ describe("AgentControllerLive", () => {
           toolCallId: "tool-input-1",
           resumeData: { answer: "Continue" },
         });
+      }),
+      bridge.service,
+      mastra.factory,
+    );
+  });
+
+  it.effect("does not persist approval for sensitive actions", () => {
+    const bridge = makeBridge();
+    const mastra = makeMastraHarness();
+    return provideController(
+      Effect.gen(function* () {
+        const controller = yield* AgentController;
+        yield* resolveCodex(controller);
+        yield* controller.startSession(codexThreadId, {
+          threadId: codexThreadId,
+          provider: ProviderDriverKind.make("codex"),
+          providerInstanceId: codexInstanceId,
+          cwd: process.cwd(),
+          modelSelection: codexSelection,
+          runtimeMode: "full-access",
+        });
+        yield* controller.sendTurn({ threadId: codexThreadId, input: "Delete build output." });
+        mastra.emit({
+          type: "tool_approval_required",
+          toolCallId: "delete-call",
+          toolName: "execute_command",
+          args: { command: "rm -rf build" },
+        } as AgentControllerEvent);
+
+        yield* controller.respondToRequest({
+          threadId: codexThreadId,
+          requestId: ApprovalRequestId.make("delete-call"),
+          decision: "acceptForSession",
+        });
+
+        expect(mastra.session.permissions.setForTool).not.toHaveBeenCalledWith({
+          toolName: "execute_command",
+          policy: "allow",
+        });
+        expect(mastra.session.respondToToolApproval).toHaveBeenCalledWith({
+          toolCallId: "delete-call",
+          decision: "approve",
+        });
+        mastra.finishSend();
+      }),
+      bridge.service,
+      mastra.factory,
+    );
+  });
+
+  it.effect("does not persist approval for local shell commands", () => {
+    const bridge = makeBridge();
+    const mastra = makeMastraHarness();
+    return provideController(
+      Effect.gen(function* () {
+        const controller = yield* AgentController;
+        yield* resolveCodex(controller);
+        yield* controller.startSession(codexThreadId, {
+          threadId: codexThreadId,
+          provider: ProviderDriverKind.make("codex"),
+          providerInstanceId: codexInstanceId,
+          cwd: process.cwd(),
+          modelSelection: codexSelection,
+          runtimeMode: "full-access",
+        });
+        yield* controller.sendTurn({ threadId: codexThreadId, input: "List files." });
+        mastra.emit({
+          type: "tool_approval_required",
+          toolCallId: "local-list-call",
+          toolName: "execute_command",
+          args: { command: "ls -la" },
+        } as AgentControllerEvent);
+
+        yield* controller.respondToRequest({
+          threadId: codexThreadId,
+          requestId: ApprovalRequestId.make("local-list-call"),
+          decision: "acceptForSession",
+        });
+
+        expect(mastra.session.permissions.setForTool).not.toHaveBeenCalledWith({
+          toolName: "execute_command",
+          policy: "allow",
+        });
+        expect(mastra.session.respondToToolApproval).toHaveBeenCalledWith({
+          toolCallId: "local-list-call",
+          decision: "approve",
+        });
+        mastra.finishSend();
       }),
       bridge.service,
       mastra.factory,
@@ -593,7 +745,7 @@ describe("AgentControllerLive", () => {
       filesystem: new LocalFilesystem({ basePath: process.cwd() }),
       sandbox: new LocalSandbox({ workingDirectory: process.cwd() }),
     });
-    const makeRemoteWorkspace = vi.fn(async () => remote);
+    const makeRemoteWorkspace = vi.fn(async (_input: CreateRemoteBotWorkspaceInput) => remote);
     const layer = makeAgentControllerLive({
       makeMastraHarness: mastra.factory,
       makeRemoteWorkspace,
@@ -618,48 +770,109 @@ describe("AgentControllerLive", () => {
         cwd: process.cwd(),
         modelSelection: codexSelection,
         runtimeMode: "full-access",
-        botSandbox: "upstash",
+      });
+      yield* controller.startSession(codexThreadId, {
+        threadId: codexThreadId,
+        provider: ProviderDriverKind.make("codex"),
+        providerInstanceId: codexInstanceId,
+        cwd: process.cwd(),
+        modelSelection: codexSelection,
+        runtimeMode: "full-access",
+        sandboxSettings: {
+          ...DEFAULT_SERVER_SETTINGS.sandbox,
+          defaultProvider: "upstash",
+          providers: {
+            ...DEFAULT_SERVER_SETTINGS.sandbox.providers,
+            upstash: {
+              environment: [{ name: "UPSTASH_BOX_API_KEY", value: "upstash-key", sensitive: true }],
+            },
+          },
+        },
       });
 
       expect(makeRemoteWorkspace).toHaveBeenCalledOnce();
+      expect(mastra.createSession).toHaveBeenCalledTimes(2);
+      expect(mastra.deleteSession).toHaveBeenCalledOnce();
+      expect(mastra.session.permissions.setForCategory).toHaveBeenCalledWith({
+        category: "edit",
+        policy: "allow",
+      });
+      expect(mastra.session.permissions.setForCategory).toHaveBeenCalledWith({
+        category: "execute",
+        policy: "allow",
+      });
+      expect(mastra.session.permissions.setForTool).toHaveBeenCalledWith({
+        toolName: "delete_file",
+        policy: "ask",
+      });
+      expect(mastra.session.permissions.setForTool).toHaveBeenCalledWith({
+        toolName: "execute_command",
+        policy: "ask",
+      });
       expect(makeRemoteWorkspace).toHaveBeenCalledWith({
         threadId: String(codexThreadId),
         sandbox: "upstash",
+        environment: [{ name: "UPSTASH_BOX_API_KEY", value: "upstash-key", sensitive: true }],
       });
-      expect(mastra.createSession.mock.calls[0]?.[0]).toMatchObject({ workspace: remote });
+      expect(mastra.createSession.mock.calls[1]?.[0]).toMatchObject({ workspace: remote });
+      yield* controller.sendTurn({ threadId: codexThreadId, input: "List files." });
+      mastra.emit({
+        type: "tool_approval_required",
+        toolCallId: "safe-cloud-command",
+        toolName: "execute_command",
+        args: { command: "ls -la" },
+      } as AgentControllerEvent);
+      expect(mastra.session.respondToToolApproval).toHaveBeenCalledWith({
+        toolCallId: "safe-cloud-command",
+        decision: "approve",
+      });
+      mastra.finishSend();
       yield* controller.stopSession({ threadId: codexThreadId });
     }).pipe(Effect.provide(layer), Effect.orDie);
   });
 
-  it.effect("keeps Claude on the existing provider adapter", () => {
+  it.effect("runs Claude and Grok through Mastra sessions", () => {
     const bridge = makeBridge();
     const mastra = makeMastraHarness();
     return provideController(
       Effect.gen(function* () {
         const controller = yield* AgentController;
-        yield* controller.resolveEngine({
-          threadId: claudeThreadId,
-          engine: { provider: "claudeAgent", model: "claude-fable-5" },
-          fallback: codexSelection,
-          mode: "plan",
-        });
-        yield* controller.startSession(claudeThreadId, {
-          threadId: claudeThreadId,
-          provider: ProviderDriverKind.make("claudeAgent"),
-          providerInstanceId: claudeInstanceId,
-          cwd: process.cwd(),
-          runtimeMode: "approval-required",
-        });
-        const result = yield* controller.sendTurn({
-          threadId: claudeThreadId,
-          input: "Use Claude.",
-        });
+        const grokThreadId = ThreadId.make("thread-mastra-grok");
+        for (const input of [
+          {
+            threadId: claudeThreadId,
+            provider: "claudeAgent",
+            instanceId: claudeInstanceId,
+            model: "claude-fable-5",
+            mastraModel: "anthropic/claude-fable-5",
+          },
+          {
+            threadId: grokThreadId,
+            provider: "grok",
+            instanceId: ProviderInstanceId.make("grok"),
+            model: "grok-4.6",
+            mastraModel: "xai/grok-4.6",
+          },
+        ] as const) {
+          yield* controller.resolveEngine({
+            threadId: input.threadId,
+            engine: { provider: input.provider, model: input.model },
+            fallback: codexSelection,
+            mode: "plan",
+          });
+          yield* controller.startSession(input.threadId, {
+            threadId: input.threadId,
+            provider: ProviderDriverKind.make(input.provider),
+            providerInstanceId: input.instanceId,
+            cwd: process.cwd(),
+            runtimeMode: "approval-required",
+          });
+          expect(mastra.session.model.switch).toHaveBeenCalledWith({ modelId: input.mastraModel });
+          yield* controller.stopSession({ threadId: input.threadId });
+        }
 
-        assert.equal(result.turnId, TurnId.make("legacy-turn"));
-        expect(bridge.startSession).toHaveBeenCalledOnce();
-        expect(bridge.sendTurn).toHaveBeenCalledOnce();
-        expect(mastra.createSession).not.toHaveBeenCalled();
-        expect(mastra.sendMessage).not.toHaveBeenCalled();
+        expect(bridge.startSession).not.toHaveBeenCalled();
+        expect(mastra.createSession).toHaveBeenCalledTimes(2);
       }),
       bridge.service,
       mastra.factory,
