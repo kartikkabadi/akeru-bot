@@ -6,6 +6,7 @@ import { WorkspacePageHeader } from "../WorkspacePageHeader";
 import { BotActivityStatus } from "./BotActivityStatus";
 import { BotAvatarView } from "./BotAvatarView";
 import { BotConversationScrollArea } from "./BotConversationScrollArea";
+import { BotMessageMarkdown } from "./BotMessageMarkdown";
 import { visibleBotChatMessages } from "./botConversationPresentation";
 import { BotPromptComposer } from "./BotPromptComposer";
 import { useGroupPresence } from "./botPresence";
@@ -86,11 +87,13 @@ export function GroupThreadLanding({ groupId }: { readonly groupId: string }) {
                       name={respondingBot.name}
                       className="mt-0.5 size-7 shrink-0"
                     />
-                    <div className="min-w-0 max-w-[85%]">
+                    <div className="min-w-0 flex-1">
                       <div className="text-sm font-medium">{respondingBot.name}</div>
-                      <p className="mt-1 whitespace-pre-wrap text-sm leading-6 text-foreground/90">
-                        {message.text}
-                      </p>
+                      <BotMessageMarkdown
+                        cwd={runtime.defaultProject?.workspaceRoot}
+                        text={message.text}
+                        threadRef={runtime.linkedThreadRef ?? undefined}
+                      />
                     </div>
                   </div>
                 );

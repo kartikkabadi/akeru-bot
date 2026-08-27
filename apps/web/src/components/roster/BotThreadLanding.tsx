@@ -19,11 +19,11 @@ import { primaryServerProvidersAtom } from "../../state/server";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { SidebarInset } from "../ui/sidebar";
 import { toastManager } from "../ui/toast";
-import ChatMarkdown from "../ChatMarkdown";
 import { WorkspacePageHeader } from "../WorkspacePageHeader";
 import { BotActivityStatus } from "./BotActivityStatus";
 import { BotAvatarView } from "./BotAvatarView";
 import { BotConversationScrollArea } from "./BotConversationScrollArea";
+import { BotMessageMarkdown } from "./BotMessageMarkdown";
 import { visibleBotChatMessages } from "./botConversationPresentation";
 import { resolveStickyBotEngine } from "./botEngineSelection";
 import { BotPromptComposer } from "./BotPromptComposer";
@@ -131,10 +131,9 @@ export function BotThreadLanding({ botId }: { readonly botId: string }) {
                       name={bot.name}
                       className="mt-0.5 size-7 shrink-0"
                     />
-                    <div className="min-w-0 max-w-[85%]">
+                    <div className="min-w-0 flex-1">
                       <div className="text-sm font-medium">{bot.name}</div>
-                      <ChatMarkdown
-                        className="mt-1"
+                      <BotMessageMarkdown
                         cwd={runtime.defaultProject?.workspaceRoot}
                         text={message.text}
                         threadRef={runtime.linkedThreadRef ?? undefined}
