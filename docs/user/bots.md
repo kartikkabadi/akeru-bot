@@ -17,6 +17,6 @@ Bot replies support headings, links, tables, task lists, code blocks, math, and 
 
 ## Approve sensitive actions
 
-A bot waits for approval before it sends, pays, deletes, or changes production. This applies even when the bot has full access. Approve or decline the pending action from its conversation.
+A bot waits for approval before it sends, pays, deletes, or changes production. This applies even when the bot has full access. Tools that do not identify themselves as read-only also wait. Approve or decline the pending action from its conversation.
 
 The decision applies only to the pending action. It does not undo work that the bot completed earlier.

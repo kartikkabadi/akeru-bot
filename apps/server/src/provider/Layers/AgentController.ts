@@ -42,7 +42,6 @@ import {
   akeruToolCategory,
   createAkeruMastraHarness,
   criticalAkeruAction,
-  type AkeruCriticalAction,
   type AkeruMastraHarness,
   type AkeruMastraHarnessOptions,
   type AkeruMastraSession,
@@ -157,10 +156,19 @@ function permissionPolicy(runtimeMode: RuntimeMode, category: AkeruToolCategory)
   return "ask";
 }
 
-function approvalDetail(toolName: string, criticalAction: AkeruCriticalAction | null): string {
-  return criticalAction
+function approvalDetail(toolName: string, oneUseApproval: boolean): string {
+  return oneUseApproval
     ? `Allow ${toolName}? This approval applies only to the pending action. It does not undo completed work.`
     : `Allow ${toolName}?`;
+}
+
+function mcpToolNeedsApproval(manager: McpManager | undefined, toolName: string): boolean {
+  const tools = manager?.getTools();
+  if (!tools || !Object.hasOwn(tools, toolName)) return false;
+  const tool = tools[toolName] as {
+    readonly mcp?: { readonly annotations?: { readonly readOnlyHint?: boolean } };
+  };
+  return tool?.mcp?.annotations?.readOnlyHint !== true;
 }
 
 function usesMastraCode(provider: ProviderDriverKind): boolean {
@@ -401,8 +409,11 @@ const make = (options?: AgentControllerLiveOptions) =>
           if (!turn) return;
           active.toolNames.set(event.toolCallId, event.toolName);
           const criticalAction = criticalAkeruAction(event.toolName, event.args);
+          const oneUseApproval =
+            criticalAction !== null ||
+            mcpToolNeedsApproval(mcpManagers.get(String(threadId)), event.toolName);
           if (
-            !criticalAction &&
+            !oneUseApproval &&
             permissionPolicy(active.runtimeMode, akeruToolCategory(event.toolName)) === "allow"
           ) {
             active.session.respondToToolApproval({
@@ -419,11 +430,11 @@ const make = (options?: AgentControllerLiveOptions) =>
             type: "request.opened",
             payload: {
               requestType: "dynamic_tool_call",
-              detail: approvalDetail(event.toolName, criticalAction),
+              detail: approvalDetail(event.toolName, oneUseApproval),
               args: event.args,
               options: [
                 { decision: "decline", label: "Decline" },
-                { decision: "accept", label: criticalAction ? "Approve" : "Allow" },
+                { decision: "accept", label: oneUseApproval ? "Approve" : "Allow" },
               ],
             },
           });

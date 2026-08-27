@@ -643,7 +643,10 @@ describe("AgentControllerLive", () => {
     const mcpManager = {
       init: vi.fn(async () => undefined),
       disconnect: vi.fn(async () => undefined),
-      getTools: vi.fn(() => ({ exa_search: {} })),
+      getTools: vi.fn(() => ({
+        exa_search: { mcp: { annotations: { readOnlyHint: true } } },
+        external_action: { mcp: { annotations: { readOnlyHint: false } } },
+      })),
     };
     const makeMcpManagerMock = vi.fn((_dataDir, _configDir, _servers) => mcpManager as never);
     const makeMcpManager: NonNullable<AgentControllerLiveOptions["makeMcpManager"]> =
@@ -679,8 +682,46 @@ describe("AgentControllerLive", () => {
         });
         expect(mcpManager.init).toHaveBeenCalledOnce();
 
+        const events: ProviderRuntimeEvent[] = [];
+        const eventsFiber = yield* controller.streamEvents.pipe(
+          Stream.runForEach((event) =>
+            Effect.sync(() => {
+              events.push(event);
+            }),
+          ),
+          Effect.forkChild({ startImmediately: true }),
+        );
+        yield* Effect.yieldNow;
+        yield* controller.sendTurn({ threadId: codexThreadId, input: "Use MCP tools." });
+        mastra.emit({
+          type: "tool_approval_required",
+          toolCallId: "read-only-mcp",
+          toolName: "exa_search",
+          args: { query: "approval cards" },
+        } as AgentControllerEvent);
+        mastra.emit({
+          type: "tool_approval_required",
+          toolCallId: "unknown-mcp-mutation",
+          toolName: "external_action",
+          args: { payload: "opaque" },
+        } as AgentControllerEvent);
+        yield* Effect.yieldNow;
+
+        expect(mastra.session.respondToToolApproval).toHaveBeenCalledWith({
+          toolCallId: "read-only-mcp",
+          decision: "approve",
+        });
+        const request = events.find((event) => event.type === "request.opened");
+        assert.isDefined(request);
+        assert.include(request.payload.detail ?? "", "It does not undo completed work.");
+        assert.deepEqual(request.payload.options, [
+          { decision: "decline", label: "Decline" },
+          { decision: "accept", label: "Approve" },
+        ]);
+
         yield* controller.stopSession({ threadId: codexThreadId });
         expect(mcpManager.disconnect).toHaveBeenCalledOnce();
+        yield* Fiber.interrupt(eventsFiber);
       }),
       bridge.service,
       mastra.factory,

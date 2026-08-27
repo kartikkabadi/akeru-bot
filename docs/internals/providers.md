@@ -46,7 +46,9 @@ maps Mastra message, tool, approval, usage, completion, and error events to
 
 The controller routes every Mastra tool through its server-side approval policy. It auto-approves
 ordinary calls when the thread mode allows them, but send, pay, delete, and production actions always
-wait for a one-use approval. A session or permanent approval cannot bypass that check.
+wait for a one-use approval. MCP tools without a `readOnlyHint: true` annotation also wait because
+the hub cannot prove that an opaque external action is safe. A session or permanent approval cannot
+bypass that check.
 
 Claude, Cursor, Grok, and OpenCode keep their existing adapters. [`LegacyProviderBridge`][bridge]
 routes those providers through `ProviderService` and forwards their canonical runtime events. Claude
