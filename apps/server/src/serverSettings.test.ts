@@ -118,6 +118,48 @@ it.layer(NodeServices.layer)("server settings", (it) => {
     }).pipe(Effect.provide(settingsLayer));
   });
 
+  it.effect("rejects plaintext sandbox secrets loaded from settings.json", () => {
+    const settingsLayer = makeServerSettingsLayer();
+    return Effect.gen(function* () {
+      const serverConfig = yield* ServerConfig.ServerConfig;
+      const fileSystem = yield* FileSystem.FileSystem;
+      const serverSettings = yield* ServerSettingsModule.ServerSettingsService;
+      yield* fileSystem.writeFileString(
+        serverConfig.settingsPath,
+        '{"sandbox":{"defaultProvider":"local","providers":{"e2b":{"environment":[{"name":"E2B_API_KEY","value":"plaintext-key","sensitive":false}]}}}}',
+      );
+
+      const error = yield* Effect.flip(serverSettings.getSettings);
+
+      assert.deepInclude(error, {
+        operation: "validate-sandbox",
+        providerInstanceId: "sandbox:e2b",
+        environmentVariable: "E2B_API_KEY",
+      });
+    }).pipe(Effect.provide(settingsLayer));
+  });
+
+  it.effect("rejects incomplete remote defaults loaded from settings.json", () => {
+    const settingsLayer = makeServerSettingsLayer();
+    return Effect.gen(function* () {
+      const serverConfig = yield* ServerConfig.ServerConfig;
+      const fileSystem = yield* FileSystem.FileSystem;
+      const serverSettings = yield* ServerSettingsModule.ServerSettingsService;
+      yield* fileSystem.writeFileString(
+        serverConfig.settingsPath,
+        '{"sandbox":{"defaultProvider":"e2b"}}',
+      );
+
+      const error = yield* Effect.flip(serverSettings.getSettings);
+
+      assert.deepInclude(error, {
+        operation: "validate-sandbox",
+        providerInstanceId: "sandbox:e2b",
+        environmentVariable: "E2B_API_KEY",
+      });
+    }).pipe(Effect.provide(settingsLayer));
+  });
+
   it.effect("identifies provider history query failures", () =>
     Effect.gen(function* () {
       const serverConfig = yield* ServerConfig.ServerConfig;

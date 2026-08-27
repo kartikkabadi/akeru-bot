@@ -492,9 +492,12 @@ const make = Effect.gen(function* () {
       ),
     );
 
-    return foldProviderInstanceEnabledFlags(
+    const normalized = foldProviderInstanceEnabledFlags(
       restoreUsedProviders(settings, persisted, providerHistory),
     );
+    const sandboxMaterialized = yield* materializeSandboxEnvironmentSecrets(normalized);
+    yield* validateSandboxSettings(sandboxMaterialized);
+    return normalized;
   });
 
   const settingsCache = yield* Cache.make<typeof cacheKey, ServerSettings, ServerSettingsError>({
