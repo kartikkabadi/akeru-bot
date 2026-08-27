@@ -51,6 +51,62 @@ const makeFailingSecretStoreLayer = (cause: ServerSecretStore.SecretStoreError) 
     }),
   );
 
+const makeMemorySecretStoreLayer = () => {
+  const values = new Map<string, Uint8Array>();
+  const service = ServerSecretStore.ServerSecretStore.of({
+    get: (name) =>
+      Effect.succeed(
+        values.has(name) ? Option.some(Uint8Array.from(values.get(name)!)) : Option.none(),
+      ),
+    set: (name, value) =>
+      Effect.sync(() => values.set(name, Uint8Array.from(value))).pipe(Effect.asVoid),
+    create: (name, value) =>
+      Effect.sync(() => values.set(name, Uint8Array.from(value))).pipe(Effect.asVoid),
+    getOrCreateRandom: (name, bytes) =>
+      Effect.sync(() => {
+        const value = values.get(name) ?? new Uint8Array(bytes);
+        values.set(name, value);
+        return Uint8Array.from(value);
+      }),
+    remove: (name) => Effect.sync(() => values.delete(name)).pipe(Effect.asVoid),
+  });
+  return { values, layer: Layer.succeed(ServerSecretStore.ServerSecretStore, service) };
+};
+
+const makeWriteFailingServerSettingsLayer = (
+  fileSystem: FileSystem.FileSystem,
+  shouldFailSettingsRename: () => boolean,
+  secretStoreLayer: Layer.Layer<ServerSecretStore.ServerSecretStore>,
+) => {
+  const renameFailure = PlatformError.systemError({
+    _tag: "PermissionDenied",
+    module: "FileSystem",
+    method: "rename",
+    pathOrDescriptor: "settings.json",
+    description: "Injected settings write failure.",
+  });
+  const failingFileSystem = FileSystem.FileSystem.of({
+    ...fileSystem,
+    rename: (oldPath, newPath) =>
+      shouldFailSettingsRename() && newPath.endsWith("settings.json")
+        ? Effect.fail(renameFailure)
+        : fileSystem.rename(oldPath, newPath),
+  });
+
+  return ServerSettingsModule.layer.pipe(
+    Layer.provide(secretStoreLayer),
+    Layer.provideMerge(Layer.fresh(SqlitePersistenceMemory)),
+    Layer.provideMerge(
+      Layer.fresh(
+        ServerConfig.layerTest(process.cwd(), {
+          prefix: "t3code-server-settings-rollback-test-",
+        }),
+      ),
+    ),
+    Layer.provideMerge(Layer.succeed(FileSystem.FileSystem, failingFileSystem)),
+  );
+};
+
 const recordProviderUsage = (provider: string, instanceId: string | null = provider) =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
@@ -1089,6 +1145,85 @@ it.layer(NodeServices.layer)("server settings", (it) => {
         "sk-or-secret",
       );
     }).pipe(Effect.provide(makeServerSettingsLayer())),
+  );
+
+  it.effect("restores provider secrets when the settings file write fails", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const secretStore = makeMemorySecretStoreLayer();
+      let failSettingsRename = false;
+      const settingsLayer = makeWriteFailingServerSettingsLayer(
+        fileSystem,
+        () => failSettingsRename,
+        secretStore.layer,
+      );
+
+      yield* Effect.gen(function* () {
+        const serverSettings = yield* ServerSettingsModule.ServerSettingsService;
+        const instanceId = ProviderInstanceId.make("codex_personal");
+        const secretName = `provider-env-${Buffer.from(instanceId).toString("base64url")}-${Buffer.from("OPENROUTER_API_KEY").toString("base64url")}`;
+        const patch = (value: string) => ({
+          providerInstances: {
+            [instanceId]: {
+              driver: ProviderDriverKind.make("codex"),
+              environment: [{ name: "OPENROUTER_API_KEY", value, sensitive: true }],
+              config: {},
+            },
+          },
+        });
+
+        yield* serverSettings.updateSettings(patch("old-provider-secret"));
+        failSettingsRename = true;
+
+        for (const value of ["new-provider-secret", ""]) {
+          const error = yield* Effect.flip(serverSettings.updateSettings(patch(value)));
+          assert.deepInclude(error, { operation: "write-file" });
+          assert.equal(
+            new TextDecoder().decode(secretStore.values.get(secretName)),
+            "old-provider-secret",
+          );
+        }
+      }).pipe(Effect.provide(settingsLayer));
+    }),
+  );
+
+  it.effect("restores sandbox secrets when the settings file write fails", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const secretStore = makeMemorySecretStoreLayer();
+      let failSettingsRename = false;
+      const settingsLayer = makeWriteFailingServerSettingsLayer(
+        fileSystem,
+        () => failSettingsRename,
+        secretStore.layer,
+      );
+
+      yield* Effect.gen(function* () {
+        const serverSettings = yield* ServerSettingsModule.ServerSettingsService;
+        const secretName = `sandbox-env-e2b-${Buffer.from("E2B_API_KEY").toString("base64url")}`;
+        const patch = (value: string) => ({
+          sandbox: {
+            providers: {
+              e2b: {
+                environment: [{ name: "E2B_API_KEY", value, sensitive: true }],
+              },
+            },
+          },
+        });
+
+        yield* serverSettings.updateSettings(patch("old-sandbox-secret"));
+        failSettingsRename = true;
+
+        for (const value of ["new-sandbox-secret", ""]) {
+          const error = yield* Effect.flip(serverSettings.updateSettings(patch(value)));
+          assert.deepInclude(error, { operation: "write-file" });
+          assert.equal(
+            new TextDecoder().decode(secretStore.values.get(secretName)),
+            "old-sandbox-secret",
+          );
+        }
+      }).pipe(Effect.provide(settingsLayer));
+    }),
   );
 
   it.effect("rejects known sandbox secrets marked non-sensitive", () =>

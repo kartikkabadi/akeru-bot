@@ -639,6 +639,85 @@ const make = Effect.gen(function* () {
       Effect.flatMap(materializeSandboxEnvironmentSecrets),
     );
 
+  type SecretSnapshot = {
+    readonly name: string;
+    readonly previous: Option.Option<Uint8Array>;
+    readonly providerInstanceId: string;
+    readonly environmentVariable: string;
+  };
+
+  const snapshotSettingsSecrets = (current: ServerSettings, next: ServerSettings) =>
+    Effect.gen(function* () {
+      const references = new Map<
+        string,
+        Pick<SecretSnapshot, "providerInstanceId" | "environmentVariable">
+      >();
+      for (const settings of [current, next]) {
+        for (const [instanceId, instance] of Object.entries(settings.providerInstances)) {
+          for (const variable of instance.environment ?? []) {
+            references.set(providerEnvironmentSecretName({ instanceId, name: variable.name }), {
+              providerInstanceId: instanceId,
+              environmentVariable: variable.name,
+            });
+          }
+        }
+        for (const provider of CLOUD_SANDBOX_PROVIDERS) {
+          for (const variable of settings.sandbox.providers[provider].environment) {
+            references.set(sandboxEnvironmentSecretName({ provider, name: variable.name }), {
+              providerInstanceId: `sandbox:${provider}`,
+              environmentVariable: variable.name,
+            });
+          }
+        }
+      }
+
+      const snapshots: SecretSnapshot[] = [];
+      for (const [name, reference] of references) {
+        const previous = yield* secretStore.get(name).pipe(
+          Effect.mapError(
+            (cause) =>
+              new ServerSettingsError({
+                settingsPath,
+                operation: "read-secret",
+                ...reference,
+                cause,
+              }),
+          ),
+        );
+        snapshots.push({ name, previous, ...reference });
+      }
+      return snapshots;
+    });
+
+  const rollbackSettingsSecrets = (snapshots: ReadonlyArray<SecretSnapshot>) =>
+    Effect.gen(function* () {
+      let firstFailure: ServerSettingsError | undefined;
+      for (const snapshot of snapshots.toReversed()) {
+        const restore = Option.match(snapshot.previous, {
+          onNone: () => secretStore.remove(snapshot.name),
+          onSome: (value) => secretStore.set(snapshot.name, value),
+        }).pipe(
+          Effect.mapError(
+            (cause) =>
+              new ServerSettingsError({
+                settingsPath,
+                operation: "rollback-secret",
+                providerInstanceId: snapshot.providerInstanceId,
+                environmentVariable: snapshot.environmentVariable,
+                cause,
+              }),
+          ),
+        );
+        yield* restore.pipe(
+          Effect.catch((error) => {
+            firstFailure ??= error;
+            return Effect.void;
+          }),
+        );
+      }
+      if (firstFailure) return yield* firstFailure;
+    });
+
   const materializeChanges = (changes: Stream.Stream<ServerSettings>) =>
     changes.pipe(
       Stream.mapEffect((settings) =>
@@ -958,16 +1037,37 @@ const make = Effect.gen(function* () {
           const patched = applyServerSettingsPatch(current, patch);
           const sandboxMaterialized = yield* materializeSandboxEnvironmentSecrets(patched);
           yield* validateSandboxSettings(sandboxMaterialized);
-          const providerSecretsPersisted = yield* persistProviderEnvironmentSecrets(
-            current,
-            patched,
+          const secretSnapshots = yield* snapshotSettingsSecrets(current, patched);
+          const next = yield* Effect.gen(function* () {
+            const providerSecretsPersisted = yield* persistProviderEnvironmentSecrets(
+              current,
+              patched,
+            );
+            const nextPersisted = yield* persistSandboxEnvironmentSecrets(current, {
+              ...providerSecretsPersisted,
+              sandbox: sandboxMaterialized.sandbox,
+            });
+            const normalized = yield* normalizeServerSettings(nextPersisted);
+            yield* writeSettingsAtomically(normalized);
+            return normalized;
+          }).pipe(
+            Effect.catch((error) =>
+              rollbackSettingsSecrets(secretSnapshots).pipe(
+                Effect.mapError(
+                  (rollbackError) =>
+                    new ServerSettingsError({
+                      settingsPath,
+                      operation: "rollback-secret",
+                      cause: new AggregateError(
+                        [error, rollbackError],
+                        "Failed to restore server settings secrets after an update failure.",
+                      ),
+                    }),
+                ),
+                Effect.flatMap(() => Effect.fail(error)),
+              ),
+            ),
           );
-          const nextPersisted = yield* persistSandboxEnvironmentSecrets(current, {
-            ...providerSecretsPersisted,
-            sandbox: sandboxMaterialized.sandbox,
-          });
-          const next = yield* normalizeServerSettings(nextPersisted);
-          yield* writeSettingsAtomically(next);
           yield* Cache.set(settingsCache, cacheKey, next);
           yield* emitChange(next);
           const materialized = yield* materializeAllSecrets(next);
