@@ -24,6 +24,11 @@ describe("settings deep links", () => {
       targetId: null,
       tooltip: "Open Settings > Connections",
     });
+    expect(parseSettingsDeepLink("grokbot://app/v1/settings?id=diagnostics")).toMatchObject({
+      section: "diagnostics",
+      targetId: null,
+      tooltip: "Open Settings > Diagnostics",
+    });
   });
 
   it("falls back to General for missing and unknown ids", () => {

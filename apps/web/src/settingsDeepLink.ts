@@ -58,6 +58,16 @@ function settingsDestination(id: string | null): Omit<SettingsDeepLinkDestinatio
     const alias = SETTINGS_DEEP_LINK_ALIASES[id];
     if (alias) return alias;
 
+    const sectionDestination = SETTINGS_SECTION_DESTINATIONS[id];
+    if (sectionDestination) {
+      return {
+        section: sectionDestination.section,
+        sectionLabel: sectionDestination.label,
+        targetId: null,
+        targetLabel: null,
+      };
+    }
+
     const item = settingsSearchItemById(id);
     const section = item ? SETTINGS_SECTION_BY_PATH[item.to] : undefined;
     if (item && section) {
@@ -66,16 +76,6 @@ function settingsDestination(id: string | null): Omit<SettingsDeepLinkDestinatio
         sectionLabel: SETTINGS_SECTION_LABELS[item.to],
         targetId: item.targetId ?? item.id,
         targetLabel: item.title,
-      };
-    }
-
-    const sectionDestination = SETTINGS_SECTION_DESTINATIONS[id];
-    if (sectionDestination) {
-      return {
-        section: sectionDestination.section,
-        sectionLabel: sectionDestination.label,
-        targetId: null,
-        targetLabel: null,
       };
     }
   }
