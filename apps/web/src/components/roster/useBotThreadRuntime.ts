@@ -3,7 +3,6 @@ import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import {
   BotId,
-  DEFAULT_RUNTIME_MODE,
   EnvironmentId,
   ThreadId,
   type ModelSelection,
@@ -28,6 +27,7 @@ import { primaryServerProvidersAtom } from "../../state/server";
 import { threadEnvironment } from "../../state/threads";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { sortScopedProjectsForSidebar } from "../Sidebar.logic";
+import { resolveBotRuntimeMode } from "./botSandbox";
 import { buildBotTurnStartInput, findLatestBotThreadTarget } from "./botThreadRuntime.logic";
 import { parseChatPath } from "./roster.logic";
 import { useRosterStore } from "./rosterStore";
@@ -130,6 +130,9 @@ export function useBotThreadRuntime(botId: string, effectiveModelSelection: Mode
     () => resolveAppModelSelectionState(settings, providers),
     [providers, settings],
   );
+  const setRuntimeMode = useAtomCommand(threadEnvironment.setRuntimeMode, {
+    reportFailure: false,
+  });
   const startTurn = useAtomCommand(threadEnvironment.startTurn, { reportFailure: false });
   const botReady = serverBots.some((candidate) => candidate.id === botId);
   const sendInFlightRef = useRef(false);
@@ -161,7 +164,7 @@ export function useBotThreadRuntime(botId: string, effectiveModelSelection: Mode
       const threadId = currentThreadRef?.threadId ?? newThreadId();
       const modelSelection: ModelSelection =
         effectiveModelSelection ?? activeProject.defaultModelSelection ?? appDefaultModelSelection;
-      const runtimeMode = bot?.runtimeMode ?? DEFAULT_RUNTIME_MODE;
+      const runtimeMode = resolveBotRuntimeMode(bot?.sandbox ?? null, settings.localExecutionMode);
       const title = threadTitle(prompt, files);
 
       try {
@@ -175,6 +178,16 @@ export function useBotThreadRuntime(botId: string, effectiveModelSelection: Mode
           })),
         );
         const environmentId = currentThreadRef?.environmentId ?? activeProject.environmentId;
+        if (currentThreadRef && rememberedThread?.runtimeMode !== runtimeMode) {
+          const modeResult = await setRuntimeMode({
+            environmentId,
+            input: { threadId, runtimeMode },
+          });
+          if (modeResult._tag === "Failure") {
+            setError(errorMessage(modeResult));
+            return false;
+          }
+        }
         const startResult = await startTurn({
           environmentId,
           input: buildBotTurnStartInput({
@@ -225,6 +238,9 @@ export function useBotThreadRuntime(botId: string, effectiveModelSelection: Mode
       botId,
       effectiveModelSelection,
       botReady,
+      rememberedThread?.runtimeMode,
+      settings.localExecutionMode,
+      setRuntimeMode,
       startTurn,
     ],
   );
