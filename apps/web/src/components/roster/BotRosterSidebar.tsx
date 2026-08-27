@@ -39,8 +39,8 @@ import { toastManager } from "../ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { BotAvatarView } from "./BotAvatarView";
 import { visibleBotChatMessages } from "./botConversationPresentation";
-import { useBotPresence } from "./botPresence";
-import { findLatestBotThreadTarget } from "./botThreadRuntime.logic";
+import { useBotPresence, useGroupPresence } from "./botPresence";
+import { findLatestBotThreadTarget, findLatestGroupThreadTarget } from "./botThreadRuntime.logic";
 import { NewBotDialog } from "./NewBotDialog";
 import {
   buildGroupedRosterSections,
@@ -210,6 +210,98 @@ function useLatestBotMessage(
   );
 }
 
+function useLatestGroupMessage(groupId: string, working: boolean): RosterLastMessage | null {
+  const environmentId = usePrimaryEnvironmentId();
+  const threadShells = useThreadShells();
+  const threadRef = useMemo(() => {
+    const target = environmentId
+      ? findLatestGroupThreadTarget(groupId, environmentId, threadShells)
+      : null;
+    return target
+      ? scopeThreadRef(EnvironmentId.make(target.environmentId), ThreadId.make(target.threadId))
+      : null;
+  }, [environmentId, groupId, threadShells]);
+  const messages = useThreadMessages(threadRef);
+  const visibleMessages = useMemo(
+    () => visibleBotChatMessages(messages, working),
+    [messages, working],
+  );
+  return useMemo(() => resolveLatestRosterMessage(null, visibleMessages), [visibleMessages]);
+}
+
+/** One sidebar row per group: stacked member avatars, name, latest message. */
+const GroupRosterRow = memo(function GroupRosterRow({
+  id,
+  name,
+  members,
+  isActive,
+  onNavigate,
+}: {
+  id: string;
+  name: string;
+  members: ReadonlyArray<Bot>;
+  isActive: boolean;
+  onNavigate: (groupId: string) => void;
+}) {
+  const timestampFormat = useClientSettings((s) => s.timestampFormat);
+  const presence = useGroupPresence(id);
+  const latestMessage = useLatestGroupMessage(id, presence === "working");
+  const indicator = resolveRosterIndicator(presence);
+  return (
+    <li className="list-none">
+      <button
+        type="button"
+        data-testid="roster-group-row"
+        aria-current={isActive || undefined}
+        onClick={() => onNavigate(id)}
+        className={cn(
+          "flex w-full cursor-pointer items-center gap-2.5 rounded-lg px-2 py-1.5 text-left outline-none select-none focus-visible:ring-2 focus-visible:ring-ring",
+          isActive
+            ? "bg-sidebar-row-active text-sidebar-foreground"
+            : "bg-transparent text-sidebar-foreground hover:bg-sidebar-row-hover",
+        )}
+      >
+        <span className="relative flex size-10 shrink-0 items-center justify-center">
+          <span className="flex -space-x-2.5">
+            {members.slice(0, 2).map((bot) => (
+              <BotAvatarView key={bot.id} avatar={bot.avatar} name={bot.name} className="size-7" />
+            ))}
+          </span>
+          {indicator !== null ? (
+            <span
+              data-testid="group-presence-dot"
+              data-status={indicator}
+              className={cn(
+                "absolute -bottom-px -right-px size-2 rounded-full ring-1 ring-sidebar",
+                indicator === "working" ? "bg-success" : "bg-warning",
+              )}
+            />
+          ) : null}
+        </span>
+        <span className="flex min-w-0 flex-1 flex-col">
+          <span className="flex items-baseline gap-2">
+            <span className="min-w-0 flex-1 truncate text-sm font-semibold">{name}</span>
+            {latestMessage ? (
+              <span className="shrink-0 text-xs tabular-nums text-sidebar-muted-foreground">
+                {formatRosterTimestamp(latestMessage.at, timestampFormat)}
+              </span>
+            ) : null}
+          </span>
+          {latestMessage ? (
+            <span className="truncate text-[13px] text-sidebar-muted-foreground">
+              {latestMessage.text}
+            </span>
+          ) : (
+            <span className="truncate text-[13px] text-sidebar-muted-foreground">
+              {members.length} {members.length === 1 ? "member" : "members"}
+            </span>
+          )}
+        </span>
+      </button>
+    </li>
+  );
+});
+
 const BotRosterRow = memo(function BotRosterRow({
   bot,
   lastMessage,
@@ -372,9 +464,10 @@ export default function BotRosterSidebar() {
   const pinnedBots = visibleBots.filter((bot) => bot.pinned);
   const unpinnedBots = visibleBots.filter((bot) => !bot.pinned);
   const groupSections = useMemo(
-    () => buildGroupedRosterSections(visibleBots, groups),
-    [groups, visibleBots],
+    () => buildGroupedRosterSections(dragLayout ?? bots, groups, query),
+    [bots, dragLayout, groups, query],
   );
+  const matchingGroupSections = groupSections.filter((section) => section.id !== "unassigned");
   const activeBot =
     activeBotId === null
       ? null
@@ -433,6 +526,9 @@ export default function BotRosterSidebar() {
     pendingClickedBotIdRef.current = bot.id;
     useRosterStore.getState().selectBot(bot.id);
     void navigate({ to: "/bots/$botId", params: { botId: bot.id } });
+  };
+  const navigateToGroup = (groupId: string) => {
+    void navigate({ to: "/groups/$groupId", params: { groupId } });
   };
 
   const [newBotOpen, setNewBotOpen] = useState(false);
@@ -574,31 +670,19 @@ export default function BotRosterSidebar() {
                     strategy={verticalListSortingStrategy}
                   >
                     <div className="flex flex-col gap-2">
-                      {groupSections.map((section) => (
+                      {matchingGroupSections.map((section) => (
                         <section key={section.id} aria-label={section.name}>
-                          <div className="mb-0.5 flex items-baseline gap-2 px-2 py-0.5">
-                            {section.id === "unassigned" ? (
-                              <span className="text-[13px] font-medium text-sidebar-muted-foreground">
-                                {section.name}
-                              </span>
-                            ) : (
-                              <button
-                                type="button"
-                                aria-current={pathname === `/groups/${section.id}` || undefined}
-                                className="rounded text-[13px] font-medium text-sidebar-muted-foreground outline-none hover:text-sidebar-foreground focus-visible:ring-2 focus-visible:ring-ring"
-                                onClick={() =>
-                                  void navigate({
-                                    to: "/groups/$groupId",
-                                    params: { groupId: section.id },
-                                  })
-                                }
-                              >
-                                {section.name}
-                              </button>
-                            )}
-                          </div>
-                          <ul className="flex min-h-12 flex-col gap-px">
-                            {section.bots.map((bot) => (
+                          <ul className="flex flex-col gap-px">
+                            <GroupRosterRow
+                              id={section.id}
+                              name={section.name}
+                              members={section.bots}
+                              isActive={pathname === `/groups/${section.id}`}
+                              onNavigate={navigateToGroup}
+                            />
+                          </ul>
+                          <ul className="flex flex-col gap-px">
+                            {filterRosterBots(section.bots, query).map((bot) => (
                               <BotRosterRow
                                 key={bot.id}
                                 bot={bot}
@@ -610,9 +694,33 @@ export default function BotRosterSidebar() {
                           </ul>
                         </section>
                       ))}
+                      {groupSections
+                        .filter((section) => section.id === "unassigned")
+                        .map((section) => (
+                          <section key={section.id} aria-label={section.name}>
+                            <div className="mb-0.5 flex items-baseline gap-2 px-2 py-0.5">
+                              <span className="text-[13px] font-medium text-sidebar-muted-foreground">
+                                {section.name}
+                              </span>
+                            </div>
+                            <ul className="flex min-h-12 flex-col gap-px">
+                              {filterRosterBots(section.bots, query).map((bot) => (
+                                <BotRosterRow
+                                  key={bot.id}
+                                  bot={bot}
+                                  lastMessage={lastMessageByBotId[bot.id] ?? null}
+                                  isActive={selectedBotId === bot.id}
+                                  onSelect={handleSelect}
+                                />
+                              ))}
+                            </ul>
+                          </section>
+                        ))}
                     </div>
                   </SortableContext>
-                  {unpinnedBots.length === 0 && pinnedBots.length === 0 ? (
+                  {unpinnedBots.length === 0 &&
+                  pinnedBots.length === 0 &&
+                  matchingGroupSections.length === 0 ? (
                     <div className="px-2 py-6 text-center text-sm text-sidebar-muted-foreground">
                       No bots match
                     </div>

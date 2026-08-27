@@ -237,20 +237,42 @@ export interface RosterGroupSection {
   readonly bots: ReadonlyArray<Bot>;
 }
 
-/** Assigned groups first, then every bot without a group under Unassigned. */
+function rosterGroupMatchesQuery(
+  group: Pick<Group, "name">,
+  members: ReadonlyArray<Bot>,
+  query: string,
+): boolean {
+  const needle = query.trim().toLowerCase();
+  if (needle.length === 0) return members.length > 0;
+  return group.name.toLowerCase().includes(needle) || filterRosterBots(members, query).length > 0;
+}
+
+/**
+ * Assigned groups first, then every bot without a group under Unassigned.
+ * Search never strips membership: a matching group keeps every member so
+ * stacked avatars stay painted. Groups that miss both the name and every
+ * member drop out.
+ */
 export function buildGroupedRosterSections(
   bots: ReadonlyArray<Bot>,
   groups: ReadonlyArray<Group>,
+  query = "",
 ): ReadonlyArray<RosterGroupSection> {
   const active = bots.filter((bot) => bot.archivedAt === null && bot.pinned === false);
   const assigned = groups.flatMap((group) => {
     const groupBots = active.filter((bot) => bot.groupId === group.id);
-    return groupBots.length > 0 ? [{ id: group.id, name: group.name, bots: groupBots }] : [];
+    return rosterGroupMatchesQuery(group, groupBots, query)
+      ? [{ id: group.id, name: group.name, bots: groupBots }]
+      : [];
   });
   const unassigned = active.filter((bot) => bot.groupId === null);
+  const visibleUnassigned =
+    query.trim().length === 0 ? unassigned : filterRosterBots(unassigned, query);
   return [
     ...assigned,
-    ...(unassigned.length > 0 ? [{ id: "unassigned", name: "Unassigned", bots: unassigned }] : []),
+    ...(visibleUnassigned.length > 0
+      ? [{ id: "unassigned", name: "Unassigned", bots: unassigned }]
+      : []),
   ];
 }
 

@@ -114,6 +114,44 @@ describe("buildGroupedRosterSections", () => {
     expect(sections[0]?.bots.map((entry) => entry.id)).toEqual(["assigned"]);
     expect(sections[1]?.bots.map((entry) => entry.id)).toEqual(["free"]);
   });
+
+  it("keeps every group member when the group name matches a search", () => {
+    const sections = buildGroupedRosterSections(
+      [
+        bot({ id: "atlas", name: "Atlas", groupId: group.id }),
+        bot({ id: "mori", name: "Mori", groupId: group.id }),
+        bot({ id: "free", name: "Free" }),
+      ],
+      [group],
+      "product",
+    );
+
+    expect(sections.map((section) => section.name)).toEqual(["Product"]);
+    expect(sections[0]?.bots.map((entry) => entry.id)).toEqual(["atlas", "mori"]);
+  });
+
+  it("keeps every group member when one member matches a search", () => {
+    const sections = buildGroupedRosterSections(
+      [
+        bot({ id: "atlas", name: "Atlas", groupId: group.id }),
+        bot({ id: "mori", name: "Mori", groupId: group.id }),
+      ],
+      [group],
+      "atlas",
+    );
+
+    expect(sections[0]?.bots.map((entry) => entry.id)).toEqual(["atlas", "mori"]);
+  });
+
+  it("hides groups whose name and members miss the search", () => {
+    const sections = buildGroupedRosterSections(
+      [bot({ id: "atlas", name: "Atlas", groupId: group.id }), bot({ id: "free", name: "Free" })],
+      [group],
+      "asdfasdf",
+    );
+
+    expect(sections).toEqual([]);
+  });
 });
 
 describe("buildRosterStrip", () => {
