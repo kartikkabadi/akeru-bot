@@ -101,6 +101,7 @@ export interface AgentControllerLiveOptions {
   readonly makeMastraHarness?: (options: AkeruMastraHarnessOptions) => Promise<AkeruMastraHarness>;
   readonly makeMcpManager?: typeof createMcpManager;
   readonly makeRemoteWorkspace?: (input: CreateRemoteBotWorkspaceInput) => Promise<Workspace>;
+  readonly useMastraCode?: (provider: ProviderDriverKind) => boolean;
 }
 
 export function createAkeruMastraAuthStorage(secretsDir: string): AuthStorage {
@@ -219,6 +220,7 @@ const make = (options?: AgentControllerLiveOptions) =>
     const runtimeEvents = yield* PubSub.unbounded<ProviderRuntimeEvent>();
     const resolvedByThread = new Map<string, ResolvedEngine>();
     const sessions = new Map<string, ActiveSession>();
+    const providerUsesMastraCode = options?.useMastraCode ?? usesMastraCode;
 
     const runMastra = <A>(operation: string, run: () => Promise<A>) =>
       Effect.tryPromise({
@@ -572,7 +574,7 @@ const make = (options?: AgentControllerLiveOptions) =>
           };
           resolvedByThread.set(String(input.threadId), resolved);
           const active = sessions.get(String(input.threadId));
-          if (active && usesMastraCode(resolved.provider)) {
+          if (active && providerUsesMastraCode(resolved.provider)) {
             yield* runMastra("model.switch", () =>
               active.session.model.switch({ modelId: resolved.mastraModelId }),
             );
@@ -606,7 +608,7 @@ const make = (options?: AgentControllerLiveOptions) =>
           detail: `Thread '${threadId}' has no resolved engine.`,
         });
       }
-      if (!usesMastraCode(resolved.provider)) {
+      if (!providerUsesMastraCode(resolved.provider)) {
         return yield* legacyProviderBridge.startSession(threadId, input);
       }
       const mcpServers = input.mcpServers ?? [];
@@ -811,7 +813,9 @@ const make = (options?: AgentControllerLiveOptions) =>
       const active = sessions.get(key);
       if (!active) {
         if (
-          usesMastraCode(resolvedByThread.get(key)?.provider ?? ProviderDriverKind.make("codex"))
+          providerUsesMastraCode(
+            resolvedByThread.get(key)?.provider ?? ProviderDriverKind.make("codex"),
+          )
         ) {
           return;
         }
@@ -828,7 +832,9 @@ const make = (options?: AgentControllerLiveOptions) =>
       const active = sessions.get(key);
       if (!active) {
         if (
-          usesMastraCode(resolvedByThread.get(key)?.provider ?? ProviderDriverKind.make("codex"))
+          providerUsesMastraCode(
+            resolvedByThread.get(key)?.provider ?? ProviderDriverKind.make("codex"),
+          )
         ) {
           return;
         }
@@ -871,7 +877,9 @@ const make = (options?: AgentControllerLiveOptions) =>
       const active = sessions.get(key);
       if (!active) {
         if (
-          usesMastraCode(resolvedByThread.get(key)?.provider ?? ProviderDriverKind.make("codex"))
+          providerUsesMastraCode(
+            resolvedByThread.get(key)?.provider ?? ProviderDriverKind.make("codex"),
+          )
         ) {
           return;
         }
@@ -902,7 +910,9 @@ const make = (options?: AgentControllerLiveOptions) =>
           return yield* legacyProviderBridge.stopSession(input);
         }
         if (
-          usesMastraCode(resolvedByThread.get(key)?.provider ?? ProviderDriverKind.make("codex"))
+          providerUsesMastraCode(
+            resolvedByThread.get(key)?.provider ?? ProviderDriverKind.make("codex"),
+          )
         ) {
           return;
         }
@@ -922,7 +932,7 @@ const make = (options?: AgentControllerLiveOptions) =>
       if (!sessions.has(String(input.threadId)) && !resolved) {
         return legacyProviderBridge.rollbackConversation(input);
       }
-      if (resolved && !usesMastraCode(resolved.provider)) {
+      if (resolved && !providerUsesMastraCode(resolved.provider)) {
         return legacyProviderBridge.rollbackConversation(input);
       }
       return Effect.fail(

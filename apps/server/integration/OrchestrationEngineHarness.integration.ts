@@ -39,7 +39,7 @@ import { ProviderAdapterRegistry } from "../src/provider/Services/ProviderAdapte
 import { makeProviderRegistryLayer } from "../src/provider/testUtils/providerRegistryMock.ts";
 import { ProviderSessionDirectoryLive } from "../src/provider/Layers/ProviderSessionDirectory.ts";
 import { ServerSettingsService } from "../src/serverSettings.ts";
-import { AgentControllerLive } from "../src/provider/Layers/AgentController.ts";
+import { makeAgentControllerLive } from "../src/provider/Layers/AgentController.ts";
 import { LegacyProviderBridgeLive } from "../src/provider/Layers/LegacyProviderBridge.ts";
 import { makeProviderServiceLive } from "../src/provider/Layers/ProviderService.ts";
 import { makeCodexAdapter } from "../src/provider/Layers/CodexAdapter.ts";
@@ -302,7 +302,9 @@ export const makeOrchestrationIntegrationHarness = (
           Layer.provide(providerEventLoggersLayer),
         );
     const legacyProviderLayer = LegacyProviderBridgeLive.pipe(Layer.provide(providerLayer));
-    const agentControllerLayer = AgentControllerLive.pipe(Layer.provide(legacyProviderLayer));
+    const agentControllerLayer = makeAgentControllerLive({ useMastraCode: () => false }).pipe(
+      Layer.provide(legacyProviderLayer),
+    );
     const providerRegistryLayer = makeProviderRegistryLayer();
 
     const checkpointStoreLayer = CheckpointStore.layer.pipe(Layer.provide(VcsDriverRegistry.layer));
