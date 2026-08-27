@@ -272,7 +272,7 @@ export function buildGroupedRosterSections(
   return [
     ...assigned,
     ...(visibleUnassigned.length > 0
-      ? [{ id: "unassigned", name: "Unassigned", bots: unassigned }]
+      ? [{ id: "unassigned", name: "Unassigned", bots: visibleUnassigned }]
       : []),
   ];
 }

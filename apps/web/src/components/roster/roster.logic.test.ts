@@ -161,6 +161,20 @@ describe("buildGroupedRosterSections", () => {
     expect(sections).toEqual([]);
   });
 
+  it("keeps only matching unassigned bots", () => {
+    const sections = buildGroupedRosterSections(
+      [
+        bot({ id: "1", name: "Akeru", label: "Research" }),
+        bot({ id: "2", name: "Mori", label: "Design" }),
+      ],
+      [],
+      "research",
+    );
+
+    expect(sections.map((section) => section.name)).toEqual(["Unassigned"]);
+    expect(sections[0]?.bots.map((entry) => entry.id)).toEqual(["1"]);
+  });
+
   it("hides groups whose name and members miss the search", () => {
     const sections = buildGroupedRosterSections(
       [bot({ id: "atlas", name: "Atlas", groupId: group.id }), bot({ id: "free", name: "Free" })],
