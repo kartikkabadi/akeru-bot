@@ -44,6 +44,10 @@ resolves the selected Codex model through an explicit subscription `AuthStorage`
 maps Mastra message, tool, approval, usage, completion, and error events to
 `ProviderRuntimeEvent`.
 
+The controller routes every Mastra tool through its server-side approval policy. It auto-approves
+ordinary calls when the thread mode allows them, but send, pay, delete, and production actions always
+wait for a one-use approval. A session or permanent approval cannot bypass that check.
+
 Claude, Cursor, Grok, and OpenCode keep their existing adapters. [`LegacyProviderBridge`][bridge]
 routes those providers through `ProviderService` and forwards their canonical runtime events. Claude
 receives the same general-purpose Akeru instructions and enabled MCP servers. A provider change stops

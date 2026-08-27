@@ -479,6 +479,108 @@ describe("AgentControllerLive", () => {
     );
   });
 
+  it.effect("keeps critical actions behind one-use approvals in full access", () => {
+    const bridge = makeBridge();
+    const mastra = makeMastraHarness();
+    return provideController(
+      Effect.gen(function* () {
+        const controller = yield* AgentController;
+        yield* resolveCodex(controller);
+        yield* controller.startSession(codexThreadId, {
+          threadId: codexThreadId,
+          provider: ProviderDriverKind.make("codex"),
+          providerInstanceId: codexInstanceId,
+          cwd: process.cwd(),
+          modelSelection: codexSelection,
+          runtimeMode: "full-access",
+        });
+
+        expect(mastra.session.state.set).toHaveBeenCalledWith({
+          projectPath: process.cwd(),
+          yolo: false,
+        });
+        expect(mastra.session.permissions.setForCategory).toHaveBeenCalledWith({
+          category: "read",
+          policy: "ask",
+        });
+        expect(mastra.session.permissions.setForCategory).toHaveBeenCalledWith({
+          category: "execute",
+          policy: "ask",
+        });
+        const events: ProviderRuntimeEvent[] = [];
+        const eventsFiber = yield* controller.streamEvents.pipe(
+          Stream.runForEach((event) =>
+            Effect.sync(() => {
+              events.push(event);
+            }),
+          ),
+          Effect.forkChild({ startImmediately: true }),
+        );
+        yield* Effect.yieldNow;
+        yield* controller.sendTurn({ threadId: codexThreadId, input: "Use tools." });
+
+        mastra.emit({
+          type: "tool_approval_required",
+          toolCallId: "safe-command",
+          toolName: "execute_command",
+          args: { command: "bun test" },
+        } as AgentControllerEvent);
+        const criticalCalls = [
+          ["send-call", "gmail_send_message", { to: "person@example.com" }],
+          ["pay-call", "stripe_charge_customer", { amount: 100 }],
+          ["delete-call", "storage_delete_object", { key: "report" }],
+          ["prod-call", "execute_command", { command: "bun run release --prod" }],
+        ] as const;
+        for (const [toolCallId, toolName, args] of criticalCalls) {
+          mastra.emit({
+            type: "tool_approval_required",
+            toolCallId,
+            toolName,
+            args,
+          } as AgentControllerEvent);
+        }
+        yield* Effect.yieldNow;
+
+        expect(mastra.session.respondToToolApproval).toHaveBeenCalledWith({
+          toolCallId: "safe-command",
+          decision: "approve",
+        });
+        const requests = events.filter((event) => event.type === "request.opened");
+        assert.equal(requests.length, 4);
+        for (const request of requests) {
+          assert.include(request.payload.detail ?? "", "It does not undo completed work.");
+          assert.deepEqual(request.payload.options, [
+            { decision: "decline", label: "Decline" },
+            { decision: "accept", label: "Approve" },
+          ]);
+        }
+
+        yield* controller.respondToRequest({
+          threadId: codexThreadId,
+          requestId: ApprovalRequestId.make("send-call"),
+          decision: "acceptForSession",
+        });
+        expect(mastra.session.permissions.setForTool).not.toHaveBeenCalled();
+        expect(mastra.session.respondToToolApproval).toHaveBeenCalledWith({
+          toolCallId: "send-call",
+          decision: "approve",
+        });
+        mastra.emit({
+          type: "tool_approval_required",
+          toolCallId: "send-call-again",
+          toolName: "gmail_send_message",
+          args: { to: "person@example.com" },
+        } as AgentControllerEvent);
+        yield* Effect.yieldNow;
+        assert.equal(events.filter((event) => event.type === "request.opened").length, 5);
+        expect(mastra.session.abort).not.toHaveBeenCalled();
+        yield* Fiber.interrupt(eventsFiber);
+      }),
+      bridge.service,
+      mastra.factory,
+    );
+  });
+
   it.effect("reads persisted image attachments for Mastra turns", () => {
     const bridge = makeBridge();
     const mastra = makeMastraHarness();
@@ -626,7 +728,9 @@ describe("AgentControllerLive", () => {
         threadId: String(codexThreadId),
         sandbox: "upstash",
       });
-      expect(mastra.createSession.mock.calls[0]?.[0]).toMatchObject({ workspace: remote });
+      expect(mastra.createSession).toHaveBeenCalledWith(
+        expect.objectContaining({ workspace: remote }),
+      );
       yield* controller.stopSession({ threadId: codexThreadId });
     }).pipe(Effect.provide(layer), Effect.orDie);
   });

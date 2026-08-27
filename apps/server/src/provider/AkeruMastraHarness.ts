@@ -76,7 +76,67 @@ export async function resolveAkeruTools(
   return { ...workspaceTools, ...options.getThreadTools(threadId) };
 }
 
-function toolCategory(toolName: string): "read" | "edit" | "execute" | "mcp" | "other" {
+export type AkeruToolCategory = "read" | "edit" | "execute" | "mcp" | "other";
+export type AkeruCriticalAction = "send" | "pay" | "delete" | "prod";
+
+const CRITICAL_ACTION_TOKENS: ReadonlyArray<readonly [AkeruCriticalAction, ReadonlySet<string>]> = [
+  ["send", new Set(["send", "post", "publish", "reply", "broadcast"])],
+  ["pay", new Set(["pay", "charge", "purchase", "checkout", "transfer"])],
+  ["delete", new Set(["delete", "remove", "destroy", "erase", "purge"])],
+  ["prod", new Set(["deploy", "release", "promote", "prod", "production"])],
+];
+
+function criticalActionFromText(value: string): AkeruCriticalAction | null {
+  const tokens = new Set(
+    value
+      .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+      .toLowerCase()
+      .split(/[^a-z0-9]+/)
+      .filter(Boolean),
+  );
+  for (const [action, actionTokens] of CRITICAL_ACTION_TOKENS) {
+    if ([...actionTokens].some((token) => tokens.has(token))) return action;
+  }
+  return null;
+}
+
+const CRITICAL_ARGUMENT_KEYS = new Set([
+  "action",
+  "operation",
+  "command",
+  "cmd",
+  "environment",
+  "env",
+  "stage",
+  "target",
+]);
+
+export function criticalAkeruAction(toolName: string, args?: unknown): AkeruCriticalAction | null {
+  const namedAction = criticalActionFromText(toolName);
+  if (namedAction) return namedAction;
+
+  const pending: unknown[] = [args];
+  let inspected = 0;
+  while (pending.length > 0 && inspected < 100) {
+    const value = pending.pop();
+    inspected += 1;
+    if (Array.isArray(value)) {
+      pending.push(...value.filter((entry) => typeof entry === "object" && entry !== null));
+      continue;
+    }
+    if (typeof value !== "object" || value === null) continue;
+    for (const [key, entry] of Object.entries(value)) {
+      if (CRITICAL_ARGUMENT_KEYS.has(key.toLowerCase()) && typeof entry === "string") {
+        const action = criticalActionFromText(`${key} ${entry}`);
+        if (action) return action;
+      }
+      if (typeof entry === "object" && entry !== null) pending.push(entry);
+    }
+  }
+  return null;
+}
+
+export function akeruToolCategory(toolName: string): AkeruToolCategory {
   if (/read|view|grep|search|find|list|stat/i.test(toolName)) return "read";
   if (/edit|write|delete|mkdir|move|rename/i.test(toolName)) return "edit";
   if (/execute|command|shell|process|terminal/i.test(toolName)) return "execute";
@@ -120,7 +180,7 @@ export async function createAkeruMastraHarness(
       "task_check",
       "subagent",
     ],
-    toolCategoryResolver: toolCategory,
+    toolCategoryResolver: akeruToolCategory,
     intervalHandlers: [],
   });
 

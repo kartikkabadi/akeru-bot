@@ -6,7 +6,7 @@ import { LocalFilesystem, LocalSandbox, Workspace } from "@mastra/core/workspace
 import { assert, describe, it } from "vite-plus/test";
 
 import { AKERU_AGENT_INSTRUCTIONS } from "./AkeruAgentInstructions.ts";
-import { resolveAkeruTools } from "./AkeruMastraHarness.ts";
+import { akeruToolCategory, criticalAkeruAction, resolveAkeruTools } from "./AkeruMastraHarness.ts";
 
 describe("AkeruMastraHarness", () => {
   it("configures Akeru as a general-purpose assistant with plugin awareness", () => {
@@ -14,6 +14,29 @@ describe("AkeruMastraHarness", () => {
     assert.include(AKERU_AGENT_INSTRUCTIONS, "enabled plugin tools");
     assert.include(AKERU_AGENT_INSTRUCTIONS, "Do not assume");
     assert.notInclude(AKERU_AGENT_INSTRUCTIONS, "coding agent");
+  });
+
+  it("classifies send, pay, delete, and production actions before tool execution", () => {
+    assert.equal(criticalAkeruAction("gmail_send_message"), "send");
+    assert.equal(criticalAkeruAction("gmail_send_read_receipt"), "send");
+    assert.equal(criticalAkeruAction("stripe_charge_customer"), "pay");
+    assert.equal(criticalAkeruAction("storage_delete_object"), "delete");
+    assert.equal(criticalAkeruAction("vercel_deploy"), "prod");
+    assert.equal(
+      criticalAkeruAction("execute_command", { command: "bun run release --prod" }),
+      "prod",
+    );
+    assert.equal(criticalAkeruAction("execute_command", { command: "bun test" }), null);
+    assert.equal(
+      criticalAkeruAction("write_file", {
+        path: "notes.md",
+        content: "Draft copy about send, pay, delete, and prod.",
+      }),
+      null,
+    );
+    assert.equal(criticalAkeruAction("api_request", { action: "delete" }), "delete");
+    assert.equal(akeruToolCategory("execute_command"), "execute");
+    assert.equal(akeruToolCategory("gmail_send_message"), "other");
   });
 
   it("builds workspace and selected MCP tools from the controller resource", async () => {

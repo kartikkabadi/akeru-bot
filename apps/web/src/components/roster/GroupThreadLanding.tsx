@@ -4,6 +4,7 @@ import { useEffect } from "react";
 import { SidebarInset } from "../ui/sidebar";
 import { WorkspacePageHeader } from "../WorkspacePageHeader";
 import { BotActivityStatus } from "./BotActivityStatus";
+import { BotApprovalPrompt } from "./BotApprovalPrompt";
 import { BotAvatarView } from "./BotAvatarView";
 import { BotConversationScrollArea } from "./BotConversationScrollArea";
 import { visibleBotChatMessages } from "./botConversationPresentation";
@@ -11,6 +12,7 @@ import { BotPromptComposer } from "./BotPromptComposer";
 import { useGroupPresence } from "./botPresence";
 import { useRosterStore } from "./rosterStore";
 import { useGroupThreadRuntime } from "./useGroupThreadRuntime";
+import { useRosterPendingApproval } from "./useRosterPendingApproval";
 
 export function GroupThreadLanding({ groupId }: { readonly groupId: string }) {
   const navigate = useNavigate();
@@ -19,6 +21,7 @@ export function GroupThreadLanding({ groupId }: { readonly groupId: string }) {
   );
   const bots = useRosterStore((state) => state.bots);
   const runtime = useGroupThreadRuntime(groupId);
+  const approvalState = useRosterPendingApproval(runtime.linkedThreadRef);
   const presence = useGroupPresence(groupId);
 
   useEffect(() => {
@@ -32,6 +35,7 @@ export function GroupThreadLanding({ groupId }: { readonly groupId: string }) {
   const working = runtime.sending || presence === "working";
   const messages = visibleBotChatMessages(runtime.messages, working);
   const activeBot = members.find((bot) => bot.id === runtime.respondingBotId) ?? boss;
+  const pendingApproval = approvalState.pendingApproval;
 
   return (
     <SidebarInset
@@ -104,6 +108,15 @@ export function GroupThreadLanding({ groupId }: { readonly groupId: string }) {
               );
             })
           )}
+          {pendingApproval ? (
+            <BotApprovalPrompt
+              approval={pendingApproval}
+              pendingCount={approvalState.pendingCount}
+              responding={approvalState.responding}
+              error={approvalState.responseError}
+              onRespond={(decision) => approvalState.respond(pendingApproval.requestId, decision)}
+            />
+          ) : null}
           {working ? <BotActivityStatus avatar={activeBot.avatar} name={activeBot.name} /> : null}
           {runtime.error ? (
             <div
@@ -119,6 +132,7 @@ export function GroupThreadLanding({ groupId }: { readonly groupId: string }) {
           draftKey={`group:${group.id}`}
           disabled={
             runtime.sending ||
+            pendingApproval !== null ||
             !runtime.groupReady ||
             !runtime.bootstrapped ||
             runtime.defaultProject === null

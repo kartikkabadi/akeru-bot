@@ -39,10 +39,14 @@ import * as Stream from "effect/Stream";
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
 import { ServerConfig } from "../../config.ts";
 import {
+  akeruToolCategory,
   createAkeruMastraHarness,
+  criticalAkeruAction,
+  type AkeruCriticalAction,
   type AkeruMastraHarness,
   type AkeruMastraHarnessOptions,
   type AkeruMastraSession,
+  type AkeruToolCategory,
 } from "../AkeruMastraHarness.ts";
 import { createBotWorkspace, type CreateRemoteBotWorkspaceInput } from "../botWorkspace.ts";
 import { AgentControllerRuntimeError, AgentControllerUnsupportedEngineError } from "../Errors.ts";
@@ -146,14 +150,17 @@ export function toMcpServerConfigs(servers: readonly McpServer[]): Record<string
   );
 }
 
-function permissionPolicy(
-  runtimeMode: RuntimeMode,
-  category: "read" | "edit" | "execute" | "mcp" | "other",
-): "allow" | "ask" {
+function permissionPolicy(runtimeMode: RuntimeMode, category: AkeruToolCategory): "allow" | "ask" {
   if (runtimeMode === "full-access" || runtimeMode === "auto") return "allow";
   if (category === "read") return "allow";
   if (runtimeMode === "auto-accept-edits" && category === "edit") return "allow";
   return "ask";
+}
+
+function approvalDetail(toolName: string, criticalAction: AkeruCriticalAction | null): string {
+  return criticalAction
+    ? `Allow ${toolName}? This approval applies only to the pending action. It does not undo completed work.`
+    : `Allow ${toolName}?`;
 }
 
 function usesMastraCode(provider: ProviderDriverKind): boolean {
@@ -390,9 +397,20 @@ const make = (options?: AgentControllerLiveOptions) =>
           });
           return;
         }
-        case "tool_approval_required":
+        case "tool_approval_required": {
           if (!turn) return;
           active.toolNames.set(event.toolCallId, event.toolName);
+          const criticalAction = criticalAkeruAction(event.toolName, event.args);
+          if (
+            !criticalAction &&
+            permissionPolicy(active.runtimeMode, akeruToolCategory(event.toolName)) === "allow"
+          ) {
+            active.session.respondToToolApproval({
+              toolCallId: event.toolCallId,
+              decision: "approve",
+            });
+            return;
+          }
           turn.waiting = true;
           publishSessionState(threadId, active, "waiting");
           publish({
@@ -401,16 +419,16 @@ const make = (options?: AgentControllerLiveOptions) =>
             type: "request.opened",
             payload: {
               requestType: "dynamic_tool_call",
-              detail: `Allow ${event.toolName}?`,
+              detail: approvalDetail(event.toolName, criticalAction),
               args: event.args,
               options: [
-                { decision: "accept", label: "Allow" },
-                { decision: "acceptForSession", label: "Allow for session" },
                 { decision: "decline", label: "Decline" },
+                { decision: "accept", label: criticalAction ? "Approve" : "Allow" },
               ],
             },
           });
           return;
+        }
         case "tool_suspended":
           if (!turn) return;
           active.toolNames.set(event.toolCallId, event.toolName);
@@ -566,8 +584,8 @@ const make = (options?: AgentControllerLiveOptions) =>
       const workspace = yield* runMastra("workspace.create", () =>
         createBotWorkspace({
           threadId: key,
-          cwd: input.cwd,
-          sandbox: input.botSandbox,
+          ...(input.cwd ? { cwd: input.cwd } : {}),
+          ...(input.botSandbox !== undefined ? { sandbox: input.botSandbox } : {}),
           ...(options?.makeRemoteWorkspace
             ? { makeRemoteWorkspace: options.makeRemoteWorkspace }
             : {}),
@@ -591,7 +609,9 @@ const make = (options?: AgentControllerLiveOptions) =>
       yield* runMastra("state.set", () =>
         session.state.set({
           ...(input.cwd ? { projectPath: input.cwd } : {}),
-          yolo: input.runtimeMode === "full-access" || input.runtimeMode === "auto",
+          // Keep Mastra approval callbacks enabled. The hub below applies the
+          // runtime mode and preserves full-access behavior for safe calls.
+          yolo: false,
         }),
       );
       yield* runMastra("model.switch", () =>
@@ -605,10 +625,7 @@ const make = (options?: AgentControllerLiveOptions) =>
         ["read", "edit", "execute", "mcp", "other"] as const,
         (category) =>
           runMastra("permissions.setForCategory", () =>
-            session.permissions.setForCategory({
-              category,
-              policy: permissionPolicy(input.runtimeMode, category),
-            }),
+            session.permissions.setForCategory({ category, policy: "ask" }),
           ),
         { discard: true },
       );
@@ -762,22 +779,22 @@ const make = (options?: AgentControllerLiveOptions) =>
         return yield* legacyProviderBridge.respondToRequest(input);
       }
       const toolCallId = String(input.requestId);
-      const toolName = active.toolNames.get(toolCallId);
-      if (input.decision === "acceptForSession" && toolName) {
-        yield* runMastra("permissions.setForTool", () =>
-          active.session.permissions.setForTool({ toolName, policy: "allow" }),
-        );
-      }
+      // Every Mastra tool call must return through this hub so a later call
+      // cannot hide critical arguments behind an earlier session approval.
+      const decision =
+        input.decision === "acceptForSession" || input.decision === "acceptAlways"
+          ? "accept"
+          : input.decision;
       if (active.activeTurn) active.activeTurn.waiting = false;
       active.session.respondToToolApproval({
         toolCallId,
-        decision: approvalDecision(input.decision),
+        decision: approvalDecision(decision),
       });
       publish({
         ...baseEvent(input.threadId, active, active.activeTurn?.turnId),
         requestId: RuntimeRequestId.make(toolCallId),
         type: "request.resolved",
-        payload: { requestType: "dynamic_tool_call" as const, decision: input.decision },
+        payload: { requestType: "dynamic_tool_call" as const, decision },
       });
       publishSessionState(input.threadId, active, "running");
     });

@@ -13,6 +13,22 @@ describe("BotThreadLanding message formatting", () => {
     expect(source).toContain("threadRef={runtime.linkedThreadRef ?? undefined}");
   });
 
+  it("renders the shared approval card in individual and group bot chats", () => {
+    const botSource = NodeFS.readFileSync(
+      new URL("./BotThreadLanding.tsx", import.meta.url),
+      "utf8",
+    );
+    const groupSource = NodeFS.readFileSync(
+      new URL("./GroupThreadLanding.tsx", import.meta.url),
+      "utf8",
+    );
+
+    expect(botSource).toContain("<BotApprovalPrompt");
+    expect(groupSource).toContain("<BotApprovalPrompt");
+    expect(botSource).not.toContain("function BotChoicePrompt");
+    expect(groupSource).not.toContain("function BotChoicePrompt");
+  });
+
   it("uses the free-scrolling conversation area instead of end-justified overflow", () => {
     const botSource = NodeFS.readFileSync(
       new URL("./BotThreadLanding.tsx", import.meta.url),
