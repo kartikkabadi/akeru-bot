@@ -185,8 +185,7 @@ function commandText(args: unknown): string {
 function isAutoApprovableCloudCommand(command: string): boolean {
   if (command.length === 0 || /[;&|`$()<>\n]/.test(command)) return false;
   const [executable = ""] = command.split(/\s+/);
-  const name = executable.split("/").at(-1)?.toLowerCase() ?? "";
-  return ["pwd", "ls", "mkdir", "touch"].includes(name);
+  return ["pwd", "ls", "mkdir", "touch"].includes(executable.toLowerCase());
 }
 
 export function isSensitiveActionToolInvocation(toolName: string, args: unknown): boolean {
@@ -721,7 +720,11 @@ const make = (options?: AgentControllerLiveOptions) =>
         const key = String(input.threadId);
         const active = sessions.get(key);
         if (!active) {
-          if (resolvedByThread.get(key)?.provider === ProviderDriverKind.make("codex")) {
+          if (
+            providerUsesMastraCode(
+              resolvedByThread.get(key)?.provider ?? ProviderDriverKind.make("codex"),
+            )
+          ) {
             return yield* new AgentControllerRuntimeError({
               operation: "sendTurn",
               detail: `Mastra session for thread '${input.threadId}' is not running.`,

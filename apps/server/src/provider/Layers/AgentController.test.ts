@@ -296,6 +296,10 @@ describe("sensitive action tools", () => {
     expect(isSensitiveActionToolInvocation("execute_command", { command: "mkdir build" })).toBe(
       false,
     );
+    expect(isSensitiveActionToolInvocation("execute_command", { command: "./ls -la" })).toBe(true);
+    expect(isSensitiveActionToolInvocation("execute_command", { command: "/usr/bin/ls" })).toBe(
+      true,
+    );
     expect(isSensitiveActionToolInvocation("execute_command", { command: "git add ." })).toBe(true);
     expect(isSensitiveActionToolInvocation("execute_command", { command: "rm -rf build" })).toBe(
       true,
@@ -407,6 +411,37 @@ describe("AgentControllerLive", () => {
       yield* controller.stopSession({ threadId: codexThreadId });
       expect(bridge.startSession).not.toHaveBeenCalled();
     }).pipe(Effect.provide(layer), Effect.orDie);
+  });
+
+  it.effect("does not route missing Claude and Grok Mastra sessions to legacy providers", () => {
+    const bridge = makeBridge();
+    const mastra = makeMastraHarness();
+    return provideController(
+      Effect.gen(function* () {
+        const controller = yield* AgentController;
+        for (const [provider, model] of [
+          ["claudeAgent", "claude-fable-5"],
+          ["grok", "grok-4.6"],
+        ] as const) {
+          const threadId = ThreadId.make(`thread-missing-${provider}`);
+          yield* controller.resolveEngine({
+            threadId,
+            engine: { provider, model },
+            fallback: { instanceId: ProviderInstanceId.make(provider), model },
+            mode: "default",
+          });
+
+          const error = yield* Effect.flip(controller.sendTurn({ threadId, input: "Reply." }));
+          assert.deepInclude(error, {
+            _tag: "AgentControllerRuntimeError",
+            operation: "sendTurn",
+          });
+        }
+        expect(bridge.sendTurn).not.toHaveBeenCalled();
+      }),
+      bridge.service,
+      mastra.factory,
+    );
   });
 
   it.effect("runs Codex turns through Mastra Session.sendMessage and normalizes events", () => {
