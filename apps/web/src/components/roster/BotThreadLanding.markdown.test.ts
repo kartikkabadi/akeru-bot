@@ -14,12 +14,18 @@ describe("BotThreadLanding message formatting", () => {
       "utf8",
     );
 
-    for (const source of [botSource, groupSource]) {
+    for (const [source, userMessageTestId] of [
+      [botSource, "bot-user-message"],
+      [groupSource, "group-user-message"],
+    ]) {
       expect(source).toContain('import { BotMessageMarkdown } from "./BotMessageMarkdown"');
       expect(source).toContain("<BotMessageMarkdown");
       expect(source).toContain("cwd={runtime.defaultProject?.workspaceRoot}");
       expect(source).toContain("threadRef={runtime.linkedThreadRef ?? undefined}");
-      expect(source).toContain('className="whitespace-pre-wrap"');
+
+      const userMessageSource = source.slice(source.indexOf(`data-testid="${userMessageTestId}"`));
+      expect(userMessageSource).toContain('<p className="whitespace-pre-wrap">{message.text}</p>');
+      expect(userMessageSource).not.toContain("<BotMessageMarkdown");
     }
   });
 
