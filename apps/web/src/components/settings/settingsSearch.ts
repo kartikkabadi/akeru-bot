@@ -266,6 +266,10 @@ const SEARCH_ITEMS_BY_ID = Object.fromEntries(
   SETTINGS_SEARCH_ITEMS.map((item) => [item.id, item]),
 ) as Readonly<Record<SettingsSearchItemId, SettingsSearchItem>>;
 
+export function settingsSearchItemById(id: string): SettingsSearchItem | null {
+  return SETTINGS_SEARCH_ITEMS.find((item) => item.id === id) ?? null;
+}
+
 /**
  * `id` and `title` props for the element a search item anchors to. Panels
  * spread (or pick from) this instead of restating the strings, so the catalog

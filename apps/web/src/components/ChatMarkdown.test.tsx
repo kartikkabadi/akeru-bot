@@ -104,6 +104,52 @@ describe("ChatMarkdown file option chips", () => {
   });
 });
 
+describe("ChatMarkdown settings chips", () => {
+  it.each([true, false])(
+    "renders the local execution chip with parseRawHtml=%s",
+    (parseRawHtml) => {
+      const href = "grokbot://app/v1/settings?id=local-execution";
+      const html = renderToStaticMarkup(
+        <ChatMarkdown
+          cwd={undefined}
+          text={`[Local execution](${href})`}
+          lineBreaks={!parseRawHtml}
+          parseRawHtml={parseRawHtml}
+        />,
+      );
+
+      expect(html).toContain("chat-markdown-settings-link");
+      expect(html).toContain(`href="${href.replaceAll("&", "&amp;")}"`);
+      expect(html).toContain('aria-label="Open Settings &gt; General &gt; Local execution"');
+      expect(html).toContain("Open Settings &gt; General &gt; Local execution");
+      expect(html).not.toContain('target="_blank"');
+    },
+  );
+
+  it("renders a sanitized raw HTML settings link as the same chip", () => {
+    const html = renderToStaticMarkup(
+      <ChatMarkdown
+        cwd={undefined}
+        text={'<a href="grokbot://app/v1/settings?id=local-execution">Local execution</a>'}
+        parseRawHtml
+      />,
+    );
+
+    expect(html).toContain("chat-markdown-settings-link");
+    expect(html).toContain('aria-label="Open Settings &gt; General &gt; Local execution"');
+  });
+
+  it.each([
+    "[Unknown](grokbot://app/v1/not-settings?id=general)",
+    '<a href="grokbot://app/v1/not-settings?id=general">Unknown</a>',
+  ])("does not make other grokbot destinations clickable: %s", (text) => {
+    const html = renderToStaticMarkup(<ChatMarkdown cwd={undefined} text={text} parseRawHtml />);
+
+    expect(html).not.toContain("grokbot:");
+    expect(html).not.toContain("chat-markdown-settings-link");
+  });
+});
+
 describe("shouldUseMarkdownFileBrowserPrimaryAction", () => {
   it("uses the browser when it is the only available primary action", () => {
     expect(

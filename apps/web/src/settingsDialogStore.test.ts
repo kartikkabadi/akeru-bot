@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it } from "vite-plus/test";
 
 import {
+  clearSettingsTarget,
   closeSettings,
   openSettings,
   settingsSectionFromPathname,
@@ -17,11 +18,22 @@ describe("settings dialog store", () => {
     expect(useSettingsDialogStore.getState().section).toBe("general");
   });
 
-  it("closes back to no section", () => {
-    openSettings("providers");
-    expect(useSettingsDialogStore.getState().section).toBe("providers");
+  it("opens a section with a row target", () => {
+    openSettings("general", "local-execution");
+    expect(useSettingsDialogStore.getState()).toMatchObject({
+      section: "general",
+      targetId: "local-execution",
+    });
+    clearSettingsTarget();
+    expect(useSettingsDialogStore.getState().targetId).toBeNull();
+    expect(useSettingsDialogStore.getState().section).toBe("general");
+  });
+
+  it("closes back to no section or row target", () => {
+    openSettings("providers", "providers");
     closeSettings();
     expect(useSettingsDialogStore.getState().section).toBeNull();
+    expect(useSettingsDialogStore.getState().targetId).toBeNull();
   });
 });
 

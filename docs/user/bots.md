@@ -14,3 +14,5 @@ Akeru Bot stores the profile in the connected environment. Other clients connect
 Use the panel button to collapse or reopen the editor. The default shortcut is **Mod+Alt+B**, and you can change `Right Panel: Toggle` in the keybinding settings. On a narrow screen, the same button opens a sheet.
 
 Bot replies support headings, links, tables, task lists, code blocks, math, and Mermaid diagrams.
+
+On web and desktop, a bot can open an app setting with a markdown link such as `[Local execution](grokbot://app/v1/settings?id=local-execution)`. Akeru Bot renders the link as a chip and shows its Settings destination on hover. The link stays inside the app. Unknown setting IDs open General.
