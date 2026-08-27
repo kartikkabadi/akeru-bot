@@ -243,7 +243,8 @@ function rosterGroupMatchesQuery(
   query: string,
 ): boolean {
   const needle = query.trim().toLowerCase();
-  if (needle.length === 0) return members.length > 0;
+  if (members.length === 0) return false;
+  if (needle.length === 0) return true;
   return group.name.toLowerCase().includes(needle) || filterRosterBots(members, query).length > 0;
 }
 

@@ -143,6 +143,24 @@ describe("buildGroupedRosterSections", () => {
     expect(sections[0]?.bots.map((entry) => entry.id)).toEqual(["atlas", "mori"]);
   });
 
+  it("hides a name-matching group when every member is pinned or archived", () => {
+    const sections = buildGroupedRosterSections(
+      [
+        bot({ id: "atlas", name: "Atlas", groupId: group.id, pinned: true }),
+        bot({
+          id: "gone",
+          name: "Gone",
+          groupId: group.id,
+          archivedAt: "2026-08-20T00:00:00.000Z",
+        }),
+      ],
+      [group],
+      "product",
+    );
+
+    expect(sections).toEqual([]);
+  });
+
   it("hides groups whose name and members miss the search", () => {
     const sections = buildGroupedRosterSections(
       [bot({ id: "atlas", name: "Atlas", groupId: group.id }), bot({ id: "free", name: "Free" })],
