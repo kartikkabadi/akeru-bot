@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useAtomValue } from "@effect/atom-react";
 import {
   type BackgroundActivityProfile,
+  type BotSandboxBrowserSharing,
   type DesktopUpdateChannel,
   ProviderDriverKind,
   type ScopedThreadRef,
@@ -158,6 +159,11 @@ const TIMESTAMP_FORMAT_LABELS = {
   "12-hour": "12-hour",
   "24-hour": "24-hour",
 } as const;
+
+const BOT_SANDBOX_BROWSER_SHARING_LABELS: Record<BotSandboxBrowserSharing, string> = {
+  shared: "Shared",
+  separate: "Separate",
+};
 
 const BACKGROUND_ACTIVITY_PROFILE_LABELS: Record<BackgroundActivityProfile, string> = {
   balanced: "Balanced",
@@ -521,6 +527,9 @@ export function useSettingsRestore(onRestored?: () => void) {
       DEFAULT_UNIFIED_SETTINGS.enableProviderUpdateChecks
         ? ["Provider update checks"]
         : []),
+      ...(settings.botSandboxBrowserSharing !== DEFAULT_UNIFIED_SETTINGS.botSandboxBrowserSharing
+        ? ["Sandbox and browser sharing"]
+        : []),
       ...(isBackgroundActivityDirty ? ["Background activity"] : []),
       ...(settings.defaultThreadEnvMode !== DEFAULT_UNIFIED_SETTINGS.defaultThreadEnvMode
         ? ["New thread mode"]
@@ -575,6 +584,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       settings.glassOpacity,
       settings.enableLegacyTokenStreaming,
       settings.enableProviderUpdateChecks,
+      settings.botSandboxBrowserSharing,
       settings.sidebarAutoSettleAfterDays,
       settings.sidebarAutoSettleOnMerge,
       settings.sidebarProjectGroupingMode,
@@ -666,6 +676,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       sidebarAutoSettleOnMerge: DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleOnMerge,
       enableLegacyTokenStreaming: DEFAULT_UNIFIED_SETTINGS.enableLegacyTokenStreaming,
       enableProviderUpdateChecks: DEFAULT_UNIFIED_SETTINGS.enableProviderUpdateChecks,
+      botSandboxBrowserSharing: DEFAULT_UNIFIED_SETTINGS.botSandboxBrowserSharing,
       backgroundActivity: DEFAULT_UNIFIED_SETTINGS.backgroundActivity,
       backgroundActivityProfile: DEFAULT_UNIFIED_SETTINGS.backgroundActivityProfile,
       automaticGitFetchInterval: DEFAULT_UNIFIED_SETTINGS.automaticGitFetchInterval,
@@ -1934,6 +1945,48 @@ export function GeneralSettingsPanel() {
               }}
               aria-label="Project grouping"
             />
+          }
+        />
+
+        <SettingsRow
+          {...searchableSetting("sandbox-browser-sharing")}
+          description="Shared uses one sandbox and browser for every bot. Separate gives each bot its own sandbox and browser profile."
+          resetAction={
+            settings.botSandboxBrowserSharing !==
+            DEFAULT_UNIFIED_SETTINGS.botSandboxBrowserSharing ? (
+              <SettingResetButton
+                label="sandbox and browser sharing"
+                onClick={() =>
+                  updateSettings({
+                    botSandboxBrowserSharing: DEFAULT_UNIFIED_SETTINGS.botSandboxBrowserSharing,
+                  })
+                }
+              />
+            ) : null
+          }
+          control={
+            <Select
+              value={settings.botSandboxBrowserSharing}
+              onValueChange={(value) => {
+                if (value === "shared" || value === "separate") {
+                  updateSettings({ botSandboxBrowserSharing: value });
+                }
+              }}
+            >
+              <SelectTrigger className="w-full sm:w-40" aria-label="Sandbox and browser sharing">
+                <SelectValue>
+                  {BOT_SANDBOX_BROWSER_SHARING_LABELS[settings.botSandboxBrowserSharing]}
+                </SelectValue>
+              </SelectTrigger>
+              <SelectPopup align="end" alignItemWithTrigger={false}>
+                <SelectItem hideIndicator value="shared">
+                  Shared
+                </SelectItem>
+                <SelectItem hideIndicator value="separate">
+                  Separate
+                </SelectItem>
+              </SelectPopup>
+            </Select>
           }
         />
 

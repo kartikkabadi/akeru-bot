@@ -176,6 +176,9 @@ describe("ProviderCommandReactor", () => {
     readonly unavailableEngine?: boolean;
   }) {
     const now = "2026-01-01T00:00:00.000Z";
+    const serverSettings = await Effect.runPromise(
+      Effect.service(ServerSettingsService).pipe(Effect.provide(ServerSettingsService.layerTest())),
+    );
     const baseDir =
       input?.baseDir ?? NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3code-reactor-"));
     createdBaseDirs.add(baseDir);
@@ -470,7 +473,7 @@ describe("ProviderCommandReactor", () => {
           generateThreadTitle,
         }),
       ),
-      Layer.provideMerge(ServerSettingsService.layerTest()),
+      Layer.provideMerge(Layer.succeed(ServerSettingsService, serverSettings)),
       Layer.provideMerge(ServerConfig.layerTest(process.cwd(), baseDir)),
       Layer.provideMerge(NodeServices.layer),
     );
@@ -583,6 +586,7 @@ describe("ProviderCommandReactor", () => {
       generateBranchName,
       generateThreadTitle,
       runtimeSessions,
+      serverSettings,
       stateDir,
       drain,
       runEffect,
@@ -633,6 +637,7 @@ describe("ProviderCommandReactor", () => {
       },
       mcpServers: [],
       botSandbox: null,
+      botSandboxBrowserSharing: "shared",
       runtimeMode: "approval-required",
     });
 
@@ -641,6 +646,58 @@ describe("ProviderCommandReactor", () => {
     expect(thread?.session?.threadId).toBe("thread-1");
     expect(thread?.session?.status).toBe("starting");
     expect(thread?.session?.runtimeMode).toBe("approval-required");
+  });
+
+  it("restarts an active provider session when sandbox and browser sharing changes", async () => {
+    const harness = await createHarness();
+    const now = "2026-01-01T00:00:00.000Z";
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.make("cmd-turn-start-sharing-1"),
+        threadId: ThreadId.make("thread-1"),
+        message: {
+          messageId: asMessageId("user-message-sharing-1"),
+          role: "user",
+          text: "first",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: now,
+      }),
+    );
+    await waitFor(() => harness.startSession.mock.calls.length === 1);
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+
+    await Effect.runPromise(
+      harness.serverSettings.updateSettings({ botSandboxBrowserSharing: "separate" }),
+    );
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.make("cmd-turn-start-sharing-2"),
+        threadId: ThreadId.make("thread-1"),
+        message: {
+          messageId: asMessageId("user-message-sharing-2"),
+          role: "user",
+          text: "second",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: now,
+      }),
+    );
+
+    await waitFor(() => harness.startSession.mock.calls.length === 2);
+    await waitFor(() => harness.sendTurn.mock.calls.length === 2);
+    expect(harness.stopSession).toHaveBeenCalledOnce();
+    expect(harness.startSession.mock.calls[1]?.[1]).toMatchObject({
+      botSandboxBrowserSharing: "separate",
+    });
+    expect(harness.startSession.mock.calls[1]?.[1]).not.toHaveProperty("resumeCursor");
   });
 
   it("uses the configured bot engine instead of the thread default", async () => {
@@ -683,7 +740,9 @@ describe("ProviderCommandReactor", () => {
         instanceId: ProviderInstanceId.make("claudeAgent"),
         model: "claude-fable-5",
       },
+      botId: BotId.make("bot-1"),
       botSandbox: "local",
+      botSandboxBrowserSharing: "shared",
     });
   });
 

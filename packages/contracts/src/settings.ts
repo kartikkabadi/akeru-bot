@@ -9,7 +9,11 @@ import {
   DEFAULT_TEXT_GENERATION_REASONING_EFFORT,
   ProviderOptionSelections,
 } from "./model.ts";
-import { ModelSelection } from "./orchestration.ts";
+import {
+  BotSandboxBrowserSharing,
+  DEFAULT_BOT_SANDBOX_BROWSER_SHARING,
+  ModelSelection,
+} from "./orchestration.ts";
 import {
   DEFAULT_PREVIEW_APPEARANCE,
   DEFAULT_PREVIEW_ZOOM_FACTOR,
@@ -638,6 +642,9 @@ export const ServerSettings = Schema.Struct({
     Schema.withDecodingDefault(Effect.succeed(false)),
   ),
   enableProviderUpdateChecks: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
+  botSandboxBrowserSharing: BotSandboxBrowserSharing.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_BOT_SANDBOX_BROWSER_SHARING)),
+  ),
   /**
    * Whether agents may drive the in-app preview browser. Turning this off
    * withholds the MCP credential, so the `t3-code` server (and with it every
@@ -863,6 +870,7 @@ export const ServerSettingsPatch = Schema.Struct({
   // Server settings
   enableLegacyTokenStreaming: Schema.optionalKey(Schema.Boolean),
   enableProviderUpdateChecks: Schema.optionalKey(Schema.Boolean),
+  botSandboxBrowserSharing: Schema.optionalKey(BotSandboxBrowserSharing),
   enableAgentBrowserAccess: Schema.optionalKey(Schema.Boolean),
   backgroundActivity: Schema.optionalKey(
     Schema.Struct({

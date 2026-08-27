@@ -923,6 +923,23 @@ it.layer(NodeServices.layer)("server settings", (it) => {
     }).pipe(Effect.provide(makeServerSettingsLayer())),
   );
 
+  it.effect("persists separate bot sandbox and browser sharing", () =>
+    Effect.gen(function* () {
+      const serverSettings = yield* ServerSettingsModule.ServerSettingsService;
+      const serverConfig = yield* ServerConfig.ServerConfig;
+      const fileSystem = yield* FileSystem.FileSystem;
+
+      const next = yield* serverSettings.updateSettings({
+        botSandboxBrowserSharing: "separate",
+      });
+
+      assert.equal(next.botSandboxBrowserSharing, "separate");
+      const raw = yield* fileSystem.readFileString(serverConfig.settingsPath);
+      // @effect-diagnostics-next-line preferSchemaOverJson:off
+      assert.equal(JSON.parse(raw).botSandboxBrowserSharing, "separate");
+    }).pipe(Effect.provide(makeServerSettingsLayer())),
+  );
+
   it.effect("writes non-default settings and explicit optional provider defaults to disk", () =>
     Effect.gen(function* () {
       const serverSettings = yield* ServerSettingsModule.ServerSettingsService;

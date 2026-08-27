@@ -8,6 +8,7 @@ import type { AgentControllerEvent, MastraDBMessage, Session } from "@mastra/cor
 import { LocalFilesystem, LocalSandbox, Workspace } from "@mastra/core/workspace";
 import {
   ApprovalRequestId,
+  BotId,
   McpServerId,
   ProviderDriverKind,
   ProviderInstanceId,
@@ -155,7 +156,7 @@ function makeMastraHarness() {
     respondToToolApproval: vi.fn(),
     respondToToolSuspension: vi.fn(async () => undefined),
   } as unknown as Session<Record<string, unknown>>;
-  const createSession = vi.fn(async () => session as never);
+  const createSession = vi.fn(async (_input: unknown) => session as never);
   const deleteSession = vi.fn(async () => true);
   const destroy = vi.fn(async () => undefined);
   const factory: NonNullable<AgentControllerLiveOptions["makeMastraHarness"]> = async (options) => {
@@ -618,16 +619,201 @@ describe("AgentControllerLive", () => {
         cwd: process.cwd(),
         modelSelection: codexSelection,
         runtimeMode: "full-access",
+        botId: BotId.make("bot-upstash"),
         botSandbox: "upstash",
+        botSandboxBrowserSharing: "separate",
       });
 
       expect(makeRemoteWorkspace).toHaveBeenCalledOnce();
       expect(makeRemoteWorkspace).toHaveBeenCalledWith({
-        threadId: String(codexThreadId),
+        threadId: "bot-bot-upstash",
         sandbox: "upstash",
       });
       expect(mastra.createSession.mock.calls[0]?.[0]).toMatchObject({ workspace: remote });
       yield* controller.stopSession({ threadId: codexThreadId });
+    }).pipe(Effect.provide(layer), Effect.orDie);
+  });
+
+  it.effect("keeps one remote workspace for shared bot sessions", () => {
+    const bridge = makeBridge();
+    const mastra = makeMastraHarness();
+    const remote = new Workspace({
+      filesystem: new LocalFilesystem({ basePath: process.cwd() }),
+      sandbox: new LocalSandbox({ workingDirectory: process.cwd() }),
+    });
+    const destroy = vi.spyOn(remote, "destroy");
+    const makeRemoteWorkspace = vi.fn(async () => remote);
+    const layer = makeAgentControllerLive({
+      makeMastraHarness: mastra.factory,
+      makeRemoteWorkspace,
+    }).pipe(
+      Layer.provide(
+        Layer.merge(
+          Layer.succeed(LegacyProviderBridge, bridge.service),
+          ServerConfig.layerTest(process.cwd(), {
+            prefix: "akeru-mastra-shared-sandbox-test-",
+          }).pipe(Layer.provide(NodeServices.layer)),
+        ),
+      ),
+    );
+    const firstThreadId = ThreadId.make("thread-shared-first");
+    const secondThreadId = ThreadId.make("thread-shared-second");
+
+    return Effect.gen(function* () {
+      const controller = yield* AgentController;
+      for (const threadId of [firstThreadId, secondThreadId]) {
+        yield* controller.resolveEngine({
+          threadId,
+          engine: { provider: "codex", model: "gpt-5.6-sol" },
+          fallback: codexSelection,
+          mode: "default",
+        });
+      }
+      yield* controller.startSession(firstThreadId, {
+        threadId: firstThreadId,
+        provider: ProviderDriverKind.make("codex"),
+        providerInstanceId: codexInstanceId,
+        modelSelection: codexSelection,
+        runtimeMode: "full-access",
+        botId: BotId.make("bot-first"),
+        botSandbox: "vercel",
+        botSandboxBrowserSharing: "shared",
+      });
+      yield* controller.startSession(secondThreadId, {
+        threadId: secondThreadId,
+        provider: ProviderDriverKind.make("codex"),
+        providerInstanceId: codexInstanceId,
+        modelSelection: codexSelection,
+        runtimeMode: "full-access",
+        botId: BotId.make("bot-second"),
+        botSandbox: "vercel",
+        botSandboxBrowserSharing: "shared",
+      });
+
+      expect(makeRemoteWorkspace).toHaveBeenCalledOnce();
+      expect(mastra.createSession.mock.calls[0]?.[0]).toMatchObject({ workspace: remote });
+      expect(mastra.createSession.mock.calls[1]?.[0]).toMatchObject({ workspace: remote });
+
+      yield* controller.stopSession({ threadId: firstThreadId });
+      expect(destroy).not.toHaveBeenCalled();
+      yield* controller.stopSession({ threadId: secondThreadId });
+      expect(destroy).toHaveBeenCalledOnce();
+    }).pipe(Effect.provide(layer), Effect.orDie);
+  });
+
+  it.effect("shares one local workspace for bots in the same working directory", () => {
+    const bridge = makeBridge();
+    const mastra = makeMastraHarness();
+    const firstThreadId = ThreadId.make("thread-local-shared-first");
+    const secondThreadId = ThreadId.make("thread-local-shared-second");
+
+    return provideController(
+      Effect.gen(function* () {
+        const controller = yield* AgentController;
+        for (const threadId of [firstThreadId, secondThreadId]) {
+          yield* controller.resolveEngine({
+            threadId,
+            engine: { provider: "codex", model: "gpt-5.6-sol" },
+            fallback: codexSelection,
+            mode: "default",
+          });
+          yield* controller.startSession(threadId, {
+            threadId,
+            provider: ProviderDriverKind.make("codex"),
+            providerInstanceId: codexInstanceId,
+            cwd: process.cwd(),
+            modelSelection: codexSelection,
+            runtimeMode: "full-access",
+            botId: BotId.make(`bot-${threadId}`),
+            botSandbox: "local",
+            botSandboxBrowserSharing: "shared",
+          });
+        }
+
+        const harness = mastra.harnessOptions[0];
+        assert.isDefined(harness);
+        expect(harness.getThreadWorkspace(String(firstThreadId))).toBe(
+          harness.getThreadWorkspace(String(secondThreadId)),
+        );
+
+        yield* controller.stopSession({ threadId: firstThreadId });
+        yield* controller.stopSession({ threadId: secondThreadId });
+      }),
+      bridge.service,
+      mastra.factory,
+    );
+  });
+
+  it.effect("creates one remote workspace for each bot in separate mode", () => {
+    const bridge = makeBridge();
+    const mastra = makeMastraHarness();
+    const remoteWorkspaces: Workspace[] = [];
+    const makeRemoteWorkspace = vi.fn(async () => {
+      const workspace = new Workspace({
+        filesystem: new LocalFilesystem({ basePath: process.cwd() }),
+        sandbox: new LocalSandbox({ workingDirectory: process.cwd() }),
+      });
+      remoteWorkspaces.push(workspace);
+      return workspace;
+    });
+    const layer = makeAgentControllerLive({
+      makeMastraHarness: mastra.factory,
+      makeRemoteWorkspace,
+    }).pipe(
+      Layer.provide(
+        Layer.merge(
+          Layer.succeed(LegacyProviderBridge, bridge.service),
+          ServerConfig.layerTest(process.cwd(), {
+            prefix: "akeru-mastra-separate-sandbox-test-",
+          }).pipe(Layer.provide(NodeServices.layer)),
+        ),
+      ),
+    );
+    const firstThreadId = ThreadId.make("thread-separate-first");
+    const secondThreadId = ThreadId.make("thread-separate-second");
+
+    return Effect.gen(function* () {
+      const controller = yield* AgentController;
+      for (const threadId of [firstThreadId, secondThreadId]) {
+        yield* controller.resolveEngine({
+          threadId,
+          engine: { provider: "codex", model: "gpt-5.6-sol" },
+          fallback: codexSelection,
+          mode: "default",
+        });
+      }
+      yield* controller.startSession(firstThreadId, {
+        threadId: firstThreadId,
+        provider: ProviderDriverKind.make("codex"),
+        providerInstanceId: codexInstanceId,
+        modelSelection: codexSelection,
+        runtimeMode: "full-access",
+        botId: BotId.make("bot-first"),
+        botSandbox: "vercel",
+        botSandboxBrowserSharing: "separate",
+      });
+      yield* controller.startSession(secondThreadId, {
+        threadId: secondThreadId,
+        provider: ProviderDriverKind.make("codex"),
+        providerInstanceId: codexInstanceId,
+        modelSelection: codexSelection,
+        runtimeMode: "full-access",
+        botId: BotId.make("bot-second"),
+        botSandbox: "vercel",
+        botSandboxBrowserSharing: "separate",
+      });
+
+      expect(makeRemoteWorkspace).toHaveBeenCalledTimes(2);
+      expect(remoteWorkspaces[0]).not.toBe(remoteWorkspaces[1]);
+      expect(mastra.createSession.mock.calls[0]?.[0]).toMatchObject({
+        workspace: remoteWorkspaces[0],
+      });
+      expect(mastra.createSession.mock.calls[1]?.[0]).toMatchObject({
+        workspace: remoteWorkspaces[1],
+      });
+
+      yield* controller.stopSession({ threadId: firstThreadId });
+      yield* controller.stopSession({ threadId: secondThreadId });
     }).pipe(Effect.provide(layer), Effect.orDie);
   });
 

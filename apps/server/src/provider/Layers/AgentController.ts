@@ -16,6 +16,7 @@ import type {
 } from "@mastra/core/agent-controller";
 import { Workspace } from "@mastra/core/workspace";
 import {
+  DEFAULT_BOT_SANDBOX_BROWSER_SHARING,
   EventId,
   ProviderDriverKind,
   ProviderInstanceId,
@@ -44,7 +45,17 @@ import {
   type AkeruMastraHarnessOptions,
   type AkeruMastraSession,
 } from "../AkeruMastraHarness.ts";
-import { createBotWorkspace, type CreateRemoteBotWorkspaceInput } from "../botWorkspace.ts";
+import {
+  createBotWorkspace,
+  isRemoteBotSandbox,
+  type CreateRemoteBotWorkspaceInput,
+} from "../botWorkspace.ts";
+import {
+  botRuntimeResourceScope,
+  BotWorkspacePool,
+  botWorkspaceResourceKey,
+  type BotWorkspaceLease,
+} from "../botWorkspacePool.ts";
 import { AgentControllerRuntimeError, AgentControllerUnsupportedEngineError } from "../Errors.ts";
 import { AgentController, type AgentControllerShape } from "../Services/AgentController.ts";
 import { LegacyProviderBridge } from "../Services/LegacyProviderBridge.ts";
@@ -83,6 +94,7 @@ interface ActiveSession {
   status: ProviderSession["status"];
   activeTurn: ActiveTurn | null;
   readonly toolNames: Map<string, string>;
+  readonly workspaceResourceKey: string;
   readonly unsubscribe: () => void;
 }
 
@@ -196,6 +208,8 @@ const make = (options?: AgentControllerLiveOptions) =>
     const authStorage = createAkeruMastraAuthStorage(config.secretsDir);
     const mcpManagers = new Map<string, McpManager>();
     const workspaces = new Map<string, Workspace>();
+    const workspaceLeases = new Map<string, BotWorkspaceLease>();
+    const workspacePool = new BotWorkspacePool();
     const makeMastraHarness = options?.makeMastraHarness ?? createAkeruMastraHarness;
     const bundle = yield* runMastra("construct", () =>
       makeMastraHarness({
@@ -216,12 +230,11 @@ const make = (options?: AgentControllerLiveOptions) =>
     };
 
     const disconnectWorkspace = (key: string) => {
-      const workspace = workspaces.get(key);
-      if (!workspace) return Effect.void;
+      const lease = workspaceLeases.get(key);
+      if (!lease) return Effect.void;
       workspaces.delete(key);
-      return runMastra("workspace.destroy", () => workspace.destroy()).pipe(
-        Effect.ignoreCause({ log: true }),
-      );
+      workspaceLeases.delete(key);
+      return runMastra("workspace.release", lease.release).pipe(Effect.ignoreCause({ log: true }));
     };
 
     const publish = (event: ProviderRuntimeEvent) => {
@@ -541,8 +554,21 @@ const make = (options?: AgentControllerLiveOptions) =>
       "AgentController.startSession",
     )(function* (threadId, input) {
       const key = String(threadId);
+      const resourceScope = botRuntimeResourceScope({
+        sharing: input.botSandboxBrowserSharing ?? DEFAULT_BOT_SANDBOX_BROWSER_SHARING,
+        ...(input.botId ? { botId: input.botId } : {}),
+        threadId: key,
+      });
+      const workspaceResourceKey = botWorkspaceResourceKey({
+        resourceScope,
+        ...(input.cwd ? { cwd: input.cwd } : {}),
+        ...(input.botSandbox !== undefined ? { sandbox: input.botSandbox } : {}),
+      });
       const existing = sessions.get(key);
-      if (existing) return toProviderSession(threadId, existing);
+      if (existing?.workspaceResourceKey === workspaceResourceKey) {
+        return toProviderSession(threadId, existing);
+      }
+      if (existing) yield* stopSession({ threadId });
       const resolved = resolvedByThread.get(key);
       if (!resolved) {
         return yield* new AgentControllerRuntimeError({
@@ -563,17 +589,30 @@ const make = (options?: AgentControllerLiveOptions) =>
         yield* runMastra("mcp.init", () => manager.init());
         mcpManagers.set(key, manager);
       }
-      const workspace = yield* runMastra("workspace.create", () =>
-        createBotWorkspace({
-          threadId: key,
-          cwd: input.cwd,
-          sandbox: input.botSandbox,
-          ...(options?.makeRemoteWorkspace
-            ? { makeRemoteWorkspace: options.makeRemoteWorkspace }
-            : {}),
-        }),
-      );
-      if (workspace) workspaces.set(key, workspace);
+      const workspaceLease = yield* runMastra("workspace.acquire", async () => {
+        const create = async () => {
+          const workspace = await createBotWorkspace({
+            threadId: resourceScope,
+            ...(input.cwd ? { cwd: input.cwd } : {}),
+            ...(input.botSandbox !== undefined ? { sandbox: input.botSandbox } : {}),
+            ...(options?.makeRemoteWorkspace
+              ? { makeRemoteWorkspace: options.makeRemoteWorkspace }
+              : {}),
+          });
+          if (!workspace) throw new Error(`Workspace is unavailable for thread '${key}'.`);
+          return workspace;
+        };
+
+        if (isRemoteBotSandbox(input.botSandbox) || input.cwd) {
+          return workspacePool.acquire(workspaceResourceKey, create);
+        }
+        return undefined;
+      });
+      const workspace = workspaceLease?.workspace;
+      if (workspaceLease) {
+        workspaces.set(key, workspaceLease.workspace);
+        workspaceLeases.set(key, workspaceLease);
+      }
       const session = yield* runMastra("createSession", () =>
         bundle.controller.createSession({
           id: key,
@@ -625,6 +664,7 @@ const make = (options?: AgentControllerLiveOptions) =>
         status: "ready" as const,
         activeTurn: null,
         toolNames: new Map<string, string>(),
+        workspaceResourceKey,
       };
       const unsubscribe = session.subscribe((event) => {
         const active = sessions.get(key);
@@ -863,6 +903,9 @@ const make = (options?: AgentControllerLiveOptions) =>
           yield* disconnectWorkspace(threadId);
         }
         sessions.clear();
+        yield* runMastra("workspace-pool.destroy", () => workspacePool.destroyAll()).pipe(
+          Effect.ignoreCause({ log: true }),
+        );
         bundle.destroy();
         yield* runMastra("destroy", () => bundle.controller.destroy()).pipe(
           Effect.ignoreCause({ log: true }),

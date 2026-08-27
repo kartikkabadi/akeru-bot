@@ -37,6 +37,10 @@ import {
 import type { AgentControllerError } from "../../provider/Errors.ts";
 import { TextGeneration } from "../../textGeneration/TextGeneration.ts";
 import { AgentController } from "../../provider/Services/AgentController.ts";
+import {
+  botRuntimeResourceScope,
+  botWorkspaceResourceKey,
+} from "../../provider/botWorkspacePool.ts";
 import { ProviderRegistry } from "../../provider/Services/ProviderRegistry.ts";
 import { ProjectionBotRepository } from "../../persistence/Services/ProjectionBots.ts";
 import { ProjectionMcpServerRepository } from "../../persistence/Services/ProjectionMcpServers.ts";
@@ -343,6 +347,7 @@ const make = Effect.gen(function* () {
     );
 
   const threadModelSelections = new Map<string, ModelSelection>();
+  const threadBotWorkspaceKeys = new Map<string, string>();
 
   const appendProviderFailureActivity = (input: {
     readonly threadId: ThreadId;
@@ -672,6 +677,8 @@ const make = Effect.gen(function* () {
     const providerChanged = currentInfo.driverKind !== desiredInfo.driverKind;
     const project = yield* resolveProject(thread.projectId);
     const mcpServers = yield* resolveControllerMcpServers(thread);
+    const botSandboxBrowserSharing = (yield* serverSettingsService.getSettings)
+      .botSandboxBrowserSharing;
     const respondingBotId = resolveControllerBotId(thread);
     const respondingBot =
       respondingBotId === null
@@ -682,6 +689,14 @@ const make = Effect.gen(function* () {
     const effectiveCwd = resolveThreadWorkspaceCwd({
       thread,
       projects: project ? [project] : [],
+    });
+    const botWorkspaceKey = botWorkspaceResourceKey({
+      resourceScope: botRuntimeResourceScope({
+        sharing: botSandboxBrowserSharing,
+        ...(respondingBotId ? { botId: respondingBotId } : {}),
+        threadId,
+      }),
+      sandbox: respondingBot?.sandbox ?? null,
     });
 
     const startProviderSession = (input?: {
@@ -696,7 +711,9 @@ const make = Effect.gen(function* () {
         ...(thread.title ? { title: thread.title } : {}),
         modelSelection: desiredModelSelection,
         mcpServers,
+        ...(respondingBotId ? { botId: respondingBotId } : {}),
         botSandbox: respondingBot?.sandbox ?? null,
+        botSandboxBrowserSharing,
         ...(input?.resumeCursor !== undefined ? { resumeCursor: input.resumeCursor } : {}),
         runtimeMode: desiredRuntimeMode,
       });
@@ -752,6 +769,9 @@ const make = Effect.gen(function* () {
         activeSession?.mcpServerIds ?? [],
         mcpServers.map((server) => server.id),
       );
+      const previousBotWorkspaceKey = threadBotWorkspaceKeys.get(threadId);
+      const botWorkspaceChanged =
+        previousBotWorkspaceKey !== undefined && previousBotWorkspaceKey !== botWorkspaceKey;
 
       if (
         !runtimeModeChanged &&
@@ -759,13 +779,15 @@ const make = Effect.gen(function* () {
         !instanceChanged &&
         !shouldRestartForModelChange &&
         !shouldRestartForModelSelectionChange &&
-        !mcpServersChanged
+        !mcpServersChanged &&
+        !botWorkspaceChanged
       ) {
+        threadBotWorkspaceKeys.set(threadId, botWorkspaceKey);
         return { threadId: existingSessionThreadId, engine: desiredEngine };
       }
 
       const resumeCursor =
-        shouldRestartForModelChange || providerChanged
+        shouldRestartForModelChange || providerChanged || botWorkspaceChanged
           ? undefined
           : (activeSession?.resumeCursor ?? undefined);
       yield* Effect.logInfo("provider command reactor restarting provider session", {
@@ -787,9 +809,10 @@ const make = Effect.gen(function* () {
         shouldRestartForModelChange,
         shouldRestartForModelSelectionChange,
         mcpServersChanged,
+        botWorkspaceChanged,
         hasResumeCursor: resumeCursor !== undefined,
       });
-      if (mcpServersChanged || providerChanged) {
+      if (mcpServersChanged || providerChanged || botWorkspaceChanged) {
         yield* agentController.stopSession({ threadId });
       }
       const restartedSession = yield* startProviderSession(
@@ -804,11 +827,13 @@ const make = Effect.gen(function* () {
         cwd: restartedSession.cwd,
       });
       yield* bindSessionToThread(restartedSession);
+      threadBotWorkspaceKeys.set(threadId, botWorkspaceKey);
       return { threadId: restartedSession.threadId, engine: desiredEngine };
     }
 
     const startedSession = yield* startProviderSession(undefined);
     yield* bindSessionToThread(startedSession);
+    threadBotWorkspaceKeys.set(threadId, botWorkspaceKey);
     return { threadId: startedSession.threadId, engine: desiredEngine };
   });
 
