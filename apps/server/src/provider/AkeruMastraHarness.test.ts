@@ -6,7 +6,12 @@ import { LocalFilesystem, LocalSandbox, Workspace } from "@mastra/core/workspace
 import { assert, describe, it } from "vite-plus/test";
 
 import { AKERU_AGENT_INSTRUCTIONS } from "./AkeruAgentInstructions.ts";
-import { akeruToolCategory, criticalAkeruAction, resolveAkeruTools } from "./AkeruMastraHarness.ts";
+import {
+  akeruActionNeedsApproval,
+  akeruToolCategory,
+  criticalAkeruAction,
+  resolveAkeruTools,
+} from "./AkeruMastraHarness.ts";
 
 describe("AkeruMastraHarness", () => {
   it("configures Akeru as a general-purpose assistant with plugin awareness", () => {
@@ -35,6 +40,16 @@ describe("AkeruMastraHarness", () => {
       null,
     );
     assert.equal(criticalAkeruAction("api_request", { action: "delete" }), "delete");
+    assert.equal(criticalAkeruAction("api_request", { method: "DELETE" }), "delete");
+    assert.isTrue(akeruActionNeedsApproval("api_request", { verb: "dispatch" }));
+    assert.isTrue(akeruActionNeedsApproval("api_request", { operation: "synchronize" }));
+    assert.isFalse(akeruActionNeedsApproval("api_request", { method: "GET" }));
+    assert.isFalse(
+      akeruActionNeedsApproval("write_file", {
+        path: "notes.md",
+        content: "Call method dispatch after approval.",
+      }),
+    );
     assert.equal(akeruToolCategory("execute_command"), "execute");
     assert.equal(akeruToolCategory("gmail_send_message"), "other");
   });

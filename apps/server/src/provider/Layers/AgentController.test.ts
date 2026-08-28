@@ -530,6 +530,8 @@ describe("AgentControllerLive", () => {
           ["pay-call", "stripe_charge_customer", { amount: 100 }],
           ["delete-call", "storage_delete_object", { key: "report" }],
           ["prod-call", "execute_command", { command: "bun run release --prod" }],
+          ["method-call", "api_request", { method: "synchronize" }],
+          ["verb-call", "api_request", { verb: "dispatch" }],
         ] as const;
         for (const [toolCallId, toolName, args] of criticalCalls) {
           mastra.emit({
@@ -546,7 +548,7 @@ describe("AgentControllerLive", () => {
           decision: "approve",
         });
         const requests = events.filter((event) => event.type === "request.opened");
-        assert.equal(requests.length, 4);
+        assert.equal(requests.length, 6);
         for (const request of requests) {
           assert.include(request.payload.detail ?? "", "It does not undo completed work.");
           assert.deepEqual(request.payload.options, [
@@ -572,7 +574,7 @@ describe("AgentControllerLive", () => {
           args: { to: "person@example.com" },
         } as AgentControllerEvent);
         yield* Effect.yieldNow;
-        assert.equal(events.filter((event) => event.type === "request.opened").length, 5);
+        assert.equal(events.filter((event) => event.type === "request.opened").length, 7);
         expect(mastra.session.abort).not.toHaveBeenCalled();
         yield* Fiber.interrupt(eventsFiber);
       }),

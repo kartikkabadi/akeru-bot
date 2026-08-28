@@ -103,6 +103,8 @@ function criticalActionFromText(value: string): AkeruCriticalAction | null {
 const CRITICAL_ARGUMENT_KEYS = new Set([
   "action",
   "operation",
+  "method",
+  "verb",
   "command",
   "cmd",
   "environment",
@@ -110,13 +112,31 @@ const CRITICAL_ARGUMENT_KEYS = new Set([
   "stage",
   "target",
 ]);
+const MUTATING_INTENT_KEYS = new Set(["action", "operation", "method", "verb"]);
+const READ_ONLY_INTENT_TOKENS = new Set([
+  "get",
+  "read",
+  "view",
+  "list",
+  "search",
+  "find",
+  "inspect",
+  "status",
+  "stat",
+]);
 
-export function criticalAkeruAction(toolName: string, args?: unknown): AkeruCriticalAction | null {
+type AkeruActionInspection = {
+  readonly action: AkeruCriticalAction | null;
+  readonly hasUnclassifiedIntent: boolean;
+};
+
+function inspectAkeruAction(toolName: string, args?: unknown): AkeruActionInspection {
   const namedAction = criticalActionFromText(toolName);
-  if (namedAction) return namedAction;
+  if (namedAction) return { action: namedAction, hasUnclassifiedIntent: false };
 
   const pending: unknown[] = [args];
   let inspected = 0;
+  let hasUnclassifiedIntent = false;
   while (pending.length > 0 && inspected < 100) {
     const value = pending.pop();
     inspected += 1;
@@ -126,14 +146,33 @@ export function criticalAkeruAction(toolName: string, args?: unknown): AkeruCrit
     }
     if (typeof value !== "object" || value === null) continue;
     for (const [key, entry] of Object.entries(value)) {
-      if (CRITICAL_ARGUMENT_KEYS.has(key.toLowerCase()) && typeof entry === "string") {
+      const normalizedKey = key.toLowerCase();
+      if (CRITICAL_ARGUMENT_KEYS.has(normalizedKey) && typeof entry === "string") {
         const action = criticalActionFromText(`${key} ${entry}`);
-        if (action) return action;
+        if (action) return { action, hasUnclassifiedIntent: false };
+        if (MUTATING_INTENT_KEYS.has(normalizedKey)) {
+          const tokens = entry
+            .toLowerCase()
+            .split(/[^a-z0-9]+/)
+            .filter(Boolean);
+          if (!tokens.some((token) => READ_ONLY_INTENT_TOKENS.has(token))) {
+            hasUnclassifiedIntent = true;
+          }
+        }
       }
       if (typeof entry === "object" && entry !== null) pending.push(entry);
     }
   }
-  return null;
+  return { action: null, hasUnclassifiedIntent };
+}
+
+export function criticalAkeruAction(toolName: string, args?: unknown): AkeruCriticalAction | null {
+  return inspectAkeruAction(toolName, args).action;
+}
+
+export function akeruActionNeedsApproval(toolName: string, args?: unknown): boolean {
+  const inspection = inspectAkeruAction(toolName, args);
+  return inspection.action !== null || inspection.hasUnclassifiedIntent;
 }
 
 export function akeruToolCategory(toolName: string): AkeruToolCategory {

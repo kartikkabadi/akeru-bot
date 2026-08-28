@@ -39,9 +39,9 @@ import * as Stream from "effect/Stream";
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
 import { ServerConfig } from "../../config.ts";
 import {
+  akeruActionNeedsApproval,
   akeruToolCategory,
   createAkeruMastraHarness,
-  criticalAkeruAction,
   type AkeruMastraHarness,
   type AkeruMastraHarnessOptions,
   type AkeruMastraSession,
@@ -408,9 +408,8 @@ const make = (options?: AgentControllerLiveOptions) =>
         case "tool_approval_required": {
           if (!turn) return;
           active.toolNames.set(event.toolCallId, event.toolName);
-          const criticalAction = criticalAkeruAction(event.toolName, event.args);
           const oneUseApproval =
-            criticalAction !== null ||
+            akeruActionNeedsApproval(event.toolName, event.args) ||
             mcpToolNeedsApproval(mcpManagers.get(String(threadId)), event.toolName);
           if (
             !oneUseApproval &&
