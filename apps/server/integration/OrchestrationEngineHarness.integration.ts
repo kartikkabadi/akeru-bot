@@ -39,7 +39,10 @@ import { ProviderAdapterRegistry } from "../src/provider/Services/ProviderAdapte
 import { makeProviderRegistryLayer } from "../src/provider/testUtils/providerRegistryMock.ts";
 import { ProviderSessionDirectoryLive } from "../src/provider/Layers/ProviderSessionDirectory.ts";
 import { ServerSettingsService } from "../src/serverSettings.ts";
-import { AgentControllerLive } from "../src/provider/Layers/AgentController.ts";
+import {
+  AgentControllerLive,
+  makeAgentControllerLive,
+} from "../src/provider/Layers/AgentController.ts";
 import { LegacyProviderBridgeLive } from "../src/provider/Layers/LegacyProviderBridge.ts";
 import { makeProviderServiceLive } from "../src/provider/Layers/ProviderService.ts";
 import { makeCodexAdapter } from "../src/provider/Layers/CodexAdapter.ts";
@@ -84,7 +87,6 @@ import * as VcsDriverRegistry from "../src/vcs/VcsDriverRegistry.ts";
 import { VcsStatusBroadcaster } from "../src/vcs/VcsStatusBroadcaster.ts";
 import { GitWorkflowService } from "../src/git/GitWorkflowService.ts";
 import * as VcsProcess from "../src/vcs/VcsProcess.ts";
-import * as AgentAwarenessRelay from "../src/relay/AgentAwarenessRelay.ts";
 
 const decodeCodexSettings = Schema.decodeEffect(CodexSettings);
 
@@ -302,7 +304,11 @@ export const makeOrchestrationIntegrationHarness = (
           Layer.provide(providerEventLoggersLayer),
         );
     const legacyProviderLayer = LegacyProviderBridgeLive.pipe(Layer.provide(providerLayer));
-    const agentControllerLayer = AgentControllerLive.pipe(Layer.provide(legacyProviderLayer));
+    const agentControllerLayer = (
+      adapterHarness
+        ? makeAgentControllerLive({ handlesWithAkeruRuntime: (_driver): _driver is never => false })
+        : AgentControllerLive
+    ).pipe(Layer.provide(legacyProviderLayer));
     const providerRegistryLayer = makeProviderRegistryLayer();
 
     const checkpointStoreLayer = CheckpointStore.layer.pipe(Layer.provide(VcsDriverRegistry.layer));
@@ -378,12 +384,6 @@ export const makeOrchestrationIntegrationHarness = (
         Layer.succeed(ThreadDeletionReactor, {
           start: () => Effect.void,
           drain: Effect.void,
-        }),
-      ),
-      Layer.provideMerge(
-        Layer.succeed(AgentAwarenessRelay.AgentAwarenessRelay, {
-          publishThread: () => Effect.void,
-          start: () => Effect.void,
         }),
       ),
     );

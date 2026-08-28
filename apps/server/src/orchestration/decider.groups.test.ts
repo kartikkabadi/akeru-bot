@@ -183,6 +183,50 @@ it.layer(NodeServices.layer)("group membership decider", (it) => {
     }),
   );
 
+  it.effect("rejects archiving or deleting a group boss", () =>
+    Effect.gen(function* () {
+      const readModel = makeReadModel({
+        bots: [makeBot({ id: BOSS_ID, groupId: GROUP_ID })],
+        groups: [makeGroup({ members: [{ botId: BOSS_ID, role: "boss" }] })],
+      });
+      for (const type of ["bot.archive", "bot.delete"] as const) {
+        const error = yield* decideOrchestrationCommand({
+          command: {
+            type,
+            commandId: CommandId.make(`cmd-${type}`),
+            botId: BOSS_ID,
+          },
+          readModel,
+        }).pipe(Effect.flip);
+        if (error._tag !== "OrchestrationCommandInvariantError") {
+          throw new Error("Expected boss invariant error");
+        }
+        expect(error.detail).toContain("boss");
+      }
+    }),
+  );
+
+  it.effect("deletes a specialist and removes its group membership", () =>
+    Effect.gen(function* () {
+      const result = yield* decideOrchestrationCommand({
+        command: {
+          type: "bot.delete",
+          commandId: CommandId.make("cmd-bot-delete"),
+          botId: SPECIALIST_ID,
+        },
+        readModel: makeReadModel({
+          bots: [
+            makeBot({ id: BOSS_ID, groupId: GROUP_ID }),
+            makeBot({ id: SPECIALIST_ID, groupId: GROUP_ID }),
+          ],
+          groups: [makeGroup()],
+        }),
+      });
+      const events = Array.isArray(result) ? result : [result];
+      expect(events.map((event) => event.type)).toEqual(["group.member-unassigned", "bot.deleted"]);
+    }),
+  );
+
   it.effect("rejects assigning an archived bot", () =>
     Effect.gen(function* () {
       const error = yield* decideOrchestrationCommand({
@@ -347,6 +391,23 @@ it.layer(NodeServices.layer)("group membership decider", (it) => {
       }
       expect(outsiderError.detail).toContain("not a member");
       expect(archivedError.detail).toContain("archived");
+    }),
+  );
+
+  it.effect("rejects new turns for an archived bot", () =>
+    Effect.gen(function* () {
+      const error = yield* decideOrchestrationCommand({
+        command: startTurnCommand(),
+        readModel: makeReadModel({
+          bots: [makeBot({ id: SPECIALIST_ID, archivedAt: NOW })],
+          threads: [{ ...makeGroupThread(), botId: SPECIALIST_ID, groupId: null }],
+        }),
+      }).pipe(Effect.flip);
+
+      if (error._tag !== "OrchestrationCommandInvariantError") {
+        throw new Error("Expected archived bot invariant error");
+      }
+      expect(error.detail).toContain("archived");
     }),
   );
 

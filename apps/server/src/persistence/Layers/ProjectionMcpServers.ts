@@ -1,4 +1,10 @@
-import { IsoDateTime, McpServer, McpServerId, McpServerTransport } from "@t3tools/contracts";
+import {
+  IsoDateTime,
+  McpServer,
+  McpServerAuthentication,
+  McpServerId,
+  McpServerTransport,
+} from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -21,6 +27,7 @@ const ProjectionMcpServerDbRow = Schema.Struct({
   command: Schema.NullOr(Schema.String),
   args: Schema.NullOr(Schema.fromJsonString(Schema.Array(Schema.String))),
   url: Schema.NullOr(Schema.String),
+  authentication: Schema.NullOr(McpServerAuthentication),
   enabled: Schema.Number,
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
@@ -48,6 +55,7 @@ function decodeRow(row: ProjectionMcpServerDbRow) {
           name: row.name,
           transport: row.transport,
           url: row.url,
+          ...(row.authentication !== null ? { authentication: row.authentication } : {}),
           enabled: row.enabled === 1,
           createdAt: row.createdAt,
           updatedAt: row.updatedAt,
@@ -71,6 +79,7 @@ const makeProjectionMcpServerRepository = Effect.gen(function* () {
           command,
           args_json,
           url,
+          authentication,
           enabled,
           created_at,
           updated_at
@@ -82,6 +91,7 @@ const makeProjectionMcpServerRepository = Effect.gen(function* () {
           ${row.transport === "stdio" ? row.command : null},
           ${row.transport === "stdio" && row.args !== undefined ? JSON.stringify(row.args) : null},
           ${row.transport === "url" ? row.url : null},
+          ${row.transport === "url" ? (row.authentication ?? null) : null},
           ${row.enabled ? 1 : 0},
           ${row.createdAt},
           ${row.updatedAt}
@@ -93,6 +103,7 @@ const makeProjectionMcpServerRepository = Effect.gen(function* () {
           command = excluded.command,
           args_json = excluded.args_json,
           url = excluded.url,
+          authentication = excluded.authentication,
           enabled = excluded.enabled,
           created_at = excluded.created_at,
           updated_at = excluded.updated_at
@@ -111,6 +122,7 @@ const makeProjectionMcpServerRepository = Effect.gen(function* () {
           command,
           args_json AS args,
           url,
+          authentication,
           enabled,
           created_at AS "createdAt",
           updated_at AS "updatedAt"
@@ -131,6 +143,7 @@ const makeProjectionMcpServerRepository = Effect.gen(function* () {
           command,
           args_json AS args,
           url,
+          authentication,
           enabled,
           created_at AS "createdAt",
           updated_at AS "updatedAt"

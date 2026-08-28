@@ -13,7 +13,7 @@ memoryLayer()("Akeru projection migration slots", (it) => {
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
 
-      assert.deepEqual(migrationManifest.slice(-8), [
+      assert.deepEqual(migrationManifest.slice(-9), [
         [45, "ProjectionBotsAndGroups"],
         [46, "ProjectionThreadOwnership"],
         [47, "ProjectionMcpServers"],
@@ -21,7 +21,8 @@ memoryLayer()("Akeru projection migration slots", (it) => {
         [49, "BotRuntimeModeAndUsageCap"],
         [50, "BotProfileMetadata"],
         [51, "BotDisabledMcpServers"],
-        [52, "ExecutorPluginCommand"],
+        [52, "HostedMcpAuthentication"],
+        [53, "HostedMcpAuthenticationColumn"],
       ]);
 
       yield* runMigrations({ toMigrationInclusive: 45 });
@@ -76,16 +77,26 @@ memoryLayer()("Akeru projection migration slots", (it) => {
       assert.deepEqual(profile, [{ label: null, description: null, disabledMcpServerIds: "[]" }]);
 
       const executor = yield* sql<{
-        readonly command: string;
-        readonly argsJson: string;
+        readonly transport: string;
+        readonly command: string | null;
+        readonly argsJson: string | null;
+        readonly url: string;
+        readonly authentication: string;
         readonly enabled: number;
       }>`
-        SELECT command, args_json AS "argsJson", enabled
+        SELECT transport, command, args_json AS "argsJson", url, authentication, enabled
         FROM projection_mcp_servers
         WHERE mcp_server_id = 'builtin-executor'
       `;
       assert.deepEqual(executor, [
-        { command: "bunx", argsJson: '["-y","executor","mcp"]', enabled: 1 },
+        {
+          transport: "url",
+          command: null,
+          argsJson: null,
+          url: "https://executor.sh/mcp",
+          authentication: "oauth",
+          enabled: 1,
+        },
       ]);
 
       const threadColumns = yield* sql<{ readonly name: string }>`

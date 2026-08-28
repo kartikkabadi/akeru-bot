@@ -46,7 +46,7 @@ const TestLayer = OrchestrationEngineLive.pipe(
 );
 
 it.layer(TestLayer)("bot persistence", (it) => {
-  it.effect("creates, edits, archives, restores, and rebuilds bots and groups", () =>
+  it.effect("creates, edits, archives, restores, deletes, and rebuilds bots and groups", () =>
     Effect.gen(function* () {
       const engine = yield* OrchestrationEngineService;
       const projectionPipeline = yield* OrchestrationProjectionPipeline;
@@ -70,14 +70,6 @@ it.layer(TestLayer)("bot persistence", (it) => {
         runtimeMode: "full-access",
         usageCap: null,
         groupId: null,
-        createdAt,
-      });
-      yield* engine.dispatch({
-        type: "group.create",
-        commandId: CommandId.make("cmd-group-create"),
-        groupId,
-        name: "Product",
-        bossBotId: botId,
         createdAt,
       });
       yield* engine.dispatch({
@@ -109,6 +101,14 @@ it.layer(TestLayer)("bot persistence", (it) => {
         type: "bot.restore",
         commandId: CommandId.make("cmd-bot-restore"),
         botId,
+      });
+      yield* engine.dispatch({
+        type: "group.create",
+        commandId: CommandId.make("cmd-group-create"),
+        groupId,
+        name: "Product",
+        bossBotId: botId,
+        createdAt,
       });
       yield* engine.dispatch({
         type: "group.rename",
@@ -170,6 +170,21 @@ it.layer(TestLayer)("bot persistence", (it) => {
       assert.equal(rebuilt.bots[0]?.groupId, null);
       assert.equal(rebuilt.bots[0]?.archivedAt, null);
       assert.deepEqual(rebuilt.groups, []);
+
+      yield* engine.dispatch({
+        type: "bot.delete",
+        commandId: CommandId.make("cmd-bot-delete"),
+        botId,
+      });
+      assert.deepEqual((yield* snapshots.getShellSnapshot()).bots, []);
+
+      yield* sql`DELETE FROM projection_bots`;
+      yield* sql`
+        DELETE FROM projection_state
+        WHERE projector = 'projection.bots'
+      `;
+      yield* projectionPipeline.bootstrap;
+      assert.deepEqual((yield* snapshots.getSnapshot()).bots, []);
     }),
   );
 

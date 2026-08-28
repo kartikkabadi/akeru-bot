@@ -453,12 +453,10 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           : undefined;
       const sourceMembership = sourceGroup?.members.find((member) => member.botId === bot.id);
       if (sourceGroup && (sourceMembership?.role === "boss" || sourceGroup.bossBotId === bot.id)) {
-        return yield* Effect.fail(
-          new OrchestrationCommandInvariantError({
-            commandType: command.type,
-            detail: `Bot '${bot.id}' is the boss of group '${sourceGroup.id}'. Replace it with 'group.boss.set' before changing its group.`,
-          }),
-        );
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Bot '${bot.id}' is the boss of group '${sourceGroup.id}'. Replace it with 'group.boss.set' before changing its group.`,
+        });
       }
 
       const occurredAt = yield* nowIso;
@@ -526,7 +524,14 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
     }
 
     case "bot.archive": {
-      yield* requireBotNotArchived({ readModel, command, botId: command.botId });
+      const bot = yield* requireBotNotArchived({ readModel, command, botId: command.botId });
+      const bossGroup = readModel.groups.find((group) => group.bossBotId === bot.id);
+      if (bossGroup) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Bot '${bot.id}' is the boss of group '${bossGroup.id}' and cannot be archived.`,
+        });
+      }
       const occurredAt = yield* nowIso;
       return {
         ...(yield* withEventBase({
@@ -562,15 +567,51 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       };
     }
 
+    case "bot.delete": {
+      const bot = yield* requireBot({ readModel, command, botId: command.botId });
+      const bossGroup = readModel.groups.find((group) => group.bossBotId === bot.id);
+      if (bossGroup) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Bot '${bot.id}' is the boss of group '${bossGroup.id}' and cannot be deleted.`,
+        });
+      }
+      const occurredAt = yield* nowIso;
+      const deletedEvent: PlannedOrchestrationEvent = {
+        ...(yield* withEventBase({
+          aggregateKind: "bot",
+          aggregateId: command.botId,
+          occurredAt,
+          commandId: command.commandId,
+        })),
+        type: "bot.deleted",
+        payload: { botId: command.botId, deletedAt: occurredAt },
+      };
+      if (bot.groupId === null) return deletedEvent;
+      const unassignedEvent: PlannedOrchestrationEvent = {
+        ...(yield* withEventBase({
+          aggregateKind: "group",
+          aggregateId: bot.groupId,
+          occurredAt,
+          commandId: command.commandId,
+        })),
+        type: "group.member-unassigned",
+        payload: {
+          groupId: bot.groupId,
+          botId: bot.id,
+          updatedAt: occurredAt,
+        },
+      };
+      return [unassignedEvent, deletedEvent];
+    }
+
     case "group.create": {
       yield* requireGroupAbsent({ readModel, command, groupId: command.groupId });
       if (command.bossBotId === undefined) {
-        return yield* Effect.fail(
-          new OrchestrationCommandInvariantError({
-            commandType: command.type,
-            detail: "A group requires a boss bot.",
-          }),
-        );
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: "A group requires a boss bot.",
+        });
       }
 
       const memberBotIds = [
@@ -582,12 +623,10 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       );
       const assignedBot = memberBots.find((bot) => bot.groupId !== null);
       if (assignedBot) {
-        return yield* Effect.fail(
-          new OrchestrationCommandInvariantError({
-            commandType: command.type,
-            detail: `Bot '${assignedBot.id}' already belongs to group '${assignedBot.groupId}'.`,
-          }),
-        );
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Bot '${assignedBot.id}' already belongs to group '${assignedBot.groupId}'.`,
+        });
       }
 
       const groupCreatedEvent: PlannedOrchestrationEvent = {
@@ -676,28 +715,22 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       const group = yield* requireGroup({ readModel, command, groupId: command.groupId });
       const bot = yield* requireBotNotArchived({ readModel, command, botId: command.botId });
       if (bot.groupId !== null && bot.groupId !== command.groupId) {
-        return yield* Effect.fail(
-          new OrchestrationCommandInvariantError({
-            commandType: command.type,
-            detail: `Bot '${bot.id}' already belongs to group '${bot.groupId}'.`,
-          }),
-        );
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Bot '${bot.id}' already belongs to group '${bot.groupId}'.`,
+        });
       }
       if (command.role === "boss" && group.bossBotId !== null && group.bossBotId !== bot.id) {
-        return yield* Effect.fail(
-          new OrchestrationCommandInvariantError({
-            commandType: command.type,
-            detail: `Group '${group.id}' already has boss bot '${group.bossBotId}'. Use 'group.boss.set' to replace it.`,
-          }),
-        );
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Group '${group.id}' already has boss bot '${group.bossBotId}'. Use 'group.boss.set' to replace it.`,
+        });
       }
       if (command.role === "specialist" && group.bossBotId === bot.id) {
-        return yield* Effect.fail(
-          new OrchestrationCommandInvariantError({
-            commandType: command.type,
-            detail: `Bot '${bot.id}' is the boss of group '${group.id}' and cannot be assigned as a specialist.`,
-          }),
-        );
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Bot '${bot.id}' is the boss of group '${group.id}' and cannot be assigned as a specialist.`,
+        });
       }
       const occurredAt = yield* nowIso;
       const assignedEvent: PlannedOrchestrationEvent = {
@@ -730,20 +763,16 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       const group = yield* requireGroup({ readModel, command, groupId: command.groupId });
       const member = group.members.find((entry) => entry.botId === command.botId);
       if (!member) {
-        return yield* Effect.fail(
-          new OrchestrationCommandInvariantError({
-            commandType: command.type,
-            detail: `Bot '${command.botId}' is not a member of group '${group.id}'.`,
-          }),
-        );
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Bot '${command.botId}' is not a member of group '${group.id}'.`,
+        });
       }
       if (member.role === "boss" || group.bossBotId === command.botId) {
-        return yield* Effect.fail(
-          new OrchestrationCommandInvariantError({
-            commandType: command.type,
-            detail: `Bot '${command.botId}' is the last boss of group '${group.id}'. Set a new boss and unassign the previous boss with one 'group.boss.set' command.`,
-          }),
-        );
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Bot '${command.botId}' is the last boss of group '${group.id}'. Set a new boss and unassign the previous boss with one 'group.boss.set' command.`,
+        });
       }
       const occurredAt = yield* nowIso;
       const unassignedEvent: PlannedOrchestrationEvent = {
@@ -781,20 +810,16 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         botId: command.bossBotId,
       });
       if (nextBoss.groupId !== null && nextBoss.groupId !== group.id) {
-        return yield* Effect.fail(
-          new OrchestrationCommandInvariantError({
-            commandType: command.type,
-            detail: `Bot '${nextBoss.id}' already belongs to group '${nextBoss.groupId}'.`,
-          }),
-        );
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Bot '${nextBoss.id}' already belongs to group '${nextBoss.groupId}'.`,
+        });
       }
       if (group.bossBotId === nextBoss.id && command.unassignPreviousBoss === true) {
-        return yield* Effect.fail(
-          new OrchestrationCommandInvariantError({
-            commandType: command.type,
-            detail: `Bot '${nextBoss.id}' is already the boss and cannot replace and unassign itself.`,
-          }),
-        );
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Bot '${nextBoss.id}' is already the boss and cannot replace and unassign itself.`,
+        });
       }
 
       const occurredAt = yield* nowIso;
@@ -871,6 +896,9 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
               name: command.name,
               transport: command.transport,
               url: command.url,
+              ...(command.authentication !== undefined
+                ? { authentication: command.authentication }
+                : {}),
               enabled: true,
               createdAt: command.createdAt,
               updatedAt: command.createdAt,
@@ -912,6 +940,9 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
               name: command.name,
               transport: command.transport,
               url: command.url,
+              ...(command.authentication !== undefined
+                ? { authentication: command.authentication }
+                : {}),
               enabled: existing.enabled,
               createdAt: existing.createdAt,
               updatedAt: occurredAt,
@@ -1103,33 +1134,27 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       // or raced client must not settle a thread whose session is coming
       // alive or working.
       if (thread.session?.status === "starting" || thread.session?.status === "running") {
-        return yield* Effect.fail(
-          new OrchestrationCommandInvariantError({
-            commandType: command.type,
-            detail: `thread ${command.threadId} has an active session and cannot be settled`,
-          }),
-        );
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `thread ${command.threadId} has an active session and cannot be settled`,
+        });
       }
       // Pending approval / user-input requests are blocked-on-you work: a
       // raced or stale client must not park them behind a settled override
       // that would surface only after the request resolves.
       if (hasOpenBlockingRequest(thread)) {
-        return yield* Effect.fail(
-          new OrchestrationCommandInvariantError({
-            commandType: command.type,
-            detail: `thread ${command.threadId} has a pending approval or user-input request and cannot be settled`,
-          }),
-        );
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `thread ${command.threadId} has a pending approval or user-input request and cannot be settled`,
+        });
       }
       const occurredAt = yield* nowIso;
       // Settling inside the adoption window would hide just-requested work.
       if (threadHasQueuedTurnStart(thread, occurredAt)) {
-        return yield* Effect.fail(
-          new OrchestrationCommandInvariantError({
-            commandType: command.type,
-            detail: `thread ${command.threadId} has a queued turn start and cannot be settled`,
-          }),
-        );
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `thread ${command.threadId} has a queued turn start and cannot be settled`,
+        });
       }
       // Settling an already-settled thread re-emits with the original
       // settledAt: the engine rejects zero-event commands, and bulk-settle /
@@ -1230,36 +1255,30 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       // structurally just a string): NaN fails every comparison, and an
       // unparseable snoozedUntil must never persist.
       if (!(Date.parse(command.snoozedUntil) > Date.parse(occurredAt))) {
-        return yield* Effect.fail(
-          new OrchestrationCommandInvariantError({
-            commandType: command.type,
-            detail: `thread ${command.threadId} snooze wake time ${command.snoozedUntil} is not in the future`,
-          }),
-        );
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `thread ${command.threadId} snooze wake time ${command.snoozedUntil} is not in the future`,
+        });
       }
       // Blocked-on-you work must not be snoozed away: a pending approval or
       // user-input request is the agent waiting on the user, and hiding it
       // defeats the request. (A running session IS snoozable — snooze only
       // affects visibility, never the agent.)
       if (hasOpenBlockingRequest(thread)) {
-        return yield* Effect.fail(
-          new OrchestrationCommandInvariantError({
-            commandType: command.type,
-            detail: `thread ${command.threadId} has a pending approval or user-input request and cannot be snoozed`,
-          }),
-        );
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `thread ${command.threadId} has a pending approval or user-input request and cannot be snoozed`,
+        });
       }
       // A queued turn start — a user message no turn has adopted yet — is
       // invisible pending work: no session, no pending flags. Snoozing in
       // that window would hide a just-requested turn exactly the way settle
       // would.
       if (threadHasQueuedTurnStart(thread, occurredAt)) {
-        return yield* Effect.fail(
-          new OrchestrationCommandInvariantError({
-            commandType: command.type,
-            detail: `thread ${command.threadId} has a queued turn start and cannot be snoozed`,
-          }),
-        );
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `thread ${command.threadId} has a queued turn start and cannot be snoozed`,
+        });
       }
       // Re-snoozing an already-snoozed thread to the SAME wake time is a
       // duplicate (double-click, raced clients): re-emit with the original
@@ -1421,12 +1440,10 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       // (rather than silently pinning) keeps a raced reorder-after-unpin
       // from resurrecting a pin the user just cleared.
       if (thread.pinnedAt == null) {
-        return yield* Effect.fail(
-          new OrchestrationCommandInvariantError({
-            commandType: command.type,
-            detail: `thread ${command.threadId} is not pinned and cannot be reordered`,
-          }),
-        );
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `thread ${command.threadId} is not pinned and cannot be reordered`,
+        });
       }
       // Idempotent by re-emission (see thread.settle): a duplicate drop on
       // the same slot keeps the existing updatedAt so it projects as a no-op.
@@ -1604,7 +1621,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       let respondingBot =
         respondingBotId === null
           ? null
-          : yield* requireBot({ readModel, command, botId: respondingBotId });
+          : yield* requireBotNotArchived({ readModel, command, botId: respondingBotId });
       if (targetThread.groupId !== null && targetThread.groupId !== undefined) {
         const group = yield* requireGroup({
           readModel,
@@ -1613,12 +1630,10 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         });
         const selectedBotId = command.respondingBotId ?? group.bossBotId;
         if (selectedBotId === null) {
-          return yield* Effect.fail(
-            new OrchestrationCommandInvariantError({
-              commandType: command.type,
-              detail: `Group '${group.id}' has no boss bot that can respond.`,
-            }),
-          );
+          return yield* new OrchestrationCommandInvariantError({
+            commandType: command.type,
+            detail: `Group '${group.id}' has no boss bot that can respond.`,
+          });
         }
         respondingBot = yield* requireActiveGroupMember({
           readModel,
@@ -1628,12 +1643,10 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         });
         respondingBotId = selectedBotId;
       } else if (command.respondingBotId !== undefined) {
-        return yield* Effect.fail(
-          new OrchestrationCommandInvariantError({
-            commandType: command.type,
-            detail: `Bot mentions can only route turns on a group-owned thread.`,
-          }),
-        );
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Bot mentions can only route turns on a group-owned thread.`,
+        });
       }
 
       const userMessageEvent: Omit<OrchestrationEvent, "sequence"> = {
@@ -1842,12 +1855,10 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           sessionComingAlive ||
           threadHasQueuedTurnStart(thread, command.createdAt)
         ) {
-          return yield* Effect.fail(
-            new OrchestrationCommandInvariantError({
-              commandType: command.type,
-              detail: `thread ${command.threadId} was re-engaged after settle; skipping session stop`,
-            }),
-          );
+          return yield* new OrchestrationCommandInvariantError({
+            commandType: command.type,
+            detail: `thread ${command.threadId} was re-engaged after settle; skipping session stop`,
+          });
         }
       }
       return {

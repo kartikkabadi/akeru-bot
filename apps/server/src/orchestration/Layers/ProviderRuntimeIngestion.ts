@@ -290,6 +290,28 @@ function orchestrationSessionStatusFromRuntimeState(
   }
 }
 
+/**
+ * User-input requests that are still open when a new turn starts can never be
+ * answered: their provider suspension died with the previous run. They must be
+ * expired or the thread's pending-user-input state pins needs-you forever.
+ */
+export function staleOpenUserInputRequestIds(
+  activities: ReadonlyArray<{ readonly kind: string; readonly payload?: unknown }>,
+): ReadonlyArray<string> {
+  const open = new Set<string>();
+  for (const activity of activities) {
+    const payload =
+      typeof activity.payload === "object" && activity.payload !== null
+        ? (activity.payload as Record<string, unknown>)
+        : null;
+    const requestId = typeof payload?.requestId === "string" ? payload.requestId : null;
+    if (requestId === null) continue;
+    if (activity.kind === "user-input.requested") open.add(requestId);
+    if (activity.kind === "user-input.resolved") open.delete(requestId);
+  }
+  return [...open];
+}
+
 function sessionStatusAllowsActiveTurn(
   status: ReturnType<typeof orchestrationSessionStatusFromRuntimeState>,
 ): boolean {
@@ -913,6 +935,8 @@ const make = Effect.gen(function* () {
     lookup: () => Effect.succeed(""),
   });
 
+  const usageCapStoppedTurnKeys = new Set<string>();
+
   const assistantSegmentStateByTurnKey = yield* Cache.make<string, AssistantSegmentState>({
     capacity: TURN_MESSAGE_IDS_BY_TURN_CACHE_CAPACITY,
     timeToLive: TURN_MESSAGE_IDS_BY_TURN_TTL,
@@ -1508,14 +1532,81 @@ const make = Effect.gen(function* () {
           return loadedThreadDetail;
         });
 
+      if (event.type === "thread.token-usage.updated" && event.turnId) {
+        const turnKey = providerTurnKey(thread.id, event.turnId);
+        if (!usageCapStoppedTurnKeys.has(turnKey)) {
+          const threadDetail = yield* getLoadedThreadDetail();
+          const ownerBotId = threadDetail?.respondingBotId ?? threadDetail?.botId ?? null;
+          if (ownerBotId) {
+            const snapshot = yield* projectionSnapshotQuery.getSnapshot();
+            const bot = snapshot.bots.find((entry) => entry.id === ownerBotId);
+            const limit = bot?.usageCap?.limit;
+            if (limit !== undefined && event.payload.usage.usedTokens >= limit) {
+              usageCapStoppedTurnKeys.add(turnKey);
+              yield* agentController.interruptTurn({
+                threadId: thread.id,
+                turnId: toTurnId(event.turnId),
+              });
+              const commandId = yield* providerCommandId(event, "bot-usage-cap");
+              yield* orchestrationEngine.dispatch({
+                type: "thread.activity.append",
+                commandId,
+                threadId: thread.id,
+                activity: {
+                  id: EventId.make(`bot-usage-cap:${thread.id}:${event.turnId}`),
+                  createdAt: event.createdAt,
+                  tone: "error",
+                  kind: "runtime.error",
+                  summary: `Bot token cap reached (${event.payload.usage.usedTokens}/${limit}).`,
+                  payload: {
+                    class: "usage_cap",
+                    usedTokens: event.payload.usage.usedTokens,
+                    limit,
+                  },
+                  turnId: toTurnId(event.turnId) ?? null,
+                },
+                createdAt: event.createdAt,
+              });
+            }
+          }
+        }
+      }
+      if (event.type === "turn.completed" && event.turnId) {
+        usageCapStoppedTurnKeys.delete(providerTurnKey(thread.id, event.turnId));
+      }
+      if (event.type === "turn.started") {
+        const threadDetail = yield* getLoadedThreadDetail();
+        for (const requestId of staleOpenUserInputRequestIds(threadDetail?.activities ?? [])) {
+          yield* orchestrationEngine.dispatch({
+            type: "thread.activity.append",
+            commandId: yield* providerCommandId(event, `stale-user-input-${requestId}`),
+            threadId: thread.id,
+            activity: {
+              id: EventId.make(`stale-user-input:${thread.id}:${requestId}`),
+              createdAt: event.createdAt,
+              tone: "info",
+              kind: "user-input.resolved",
+              summary: "User input request expired",
+              payload: { requestId, answers: {} },
+              turnId: toTurnId(event.turnId) ?? null,
+            },
+            createdAt: event.createdAt,
+          });
+        }
+      }
+
       const now = event.createdAt;
       const eventTurnId = toTurnId(event.turnId);
       const activeTurnId = thread.session?.activeTurnId ?? null;
       const pendingTurnStart = yield* projectionTurnRepository.getPendingTurnStartByThreadId({
         threadId: thread.id,
       });
-      const hasPendingTurnStart =
-        Option.isSome(pendingTurnStart) && thread.session?.status === "starting";
+      // A pending turn start row is authoritative: the decider queued a turn
+      // that has not reached the provider yet. Session churn while the queue
+      // drains (a stop-and-restart to apply new configuration, a fresh
+      // session's initial ready) must not demote the projected status below
+      // "starting", or every working indicator drops mid-turn.
+      const hasPendingTurnStart = Option.isSome(pendingTurnStart);
 
       const conflictsWithActiveTurn =
         activeTurnId !== null && eventTurnId !== undefined && !sameId(activeTurnId, eventTurnId);
@@ -1582,12 +1673,15 @@ const make = Effect.gen(function* () {
           switch (event.type) {
             case "session.state.changed": {
               const runtimeStatus = orchestrationSessionStatusFromRuntimeState(event.payload.state);
-              return hasPendingTurnStart && runtimeStatus === "ready" ? "starting" : runtimeStatus;
+              return hasPendingTurnStart &&
+                (runtimeStatus === "ready" || runtimeStatus === "stopped")
+                ? "starting"
+                : runtimeStatus;
             }
             case "turn.started":
               return "running";
             case "session.exited":
-              return "stopped";
+              return hasPendingTurnStart ? "starting" : "stopped";
             case "turn.completed":
               return normalizeRuntimeTurnState(event.payload.state) === "failed"
                 ? "error"

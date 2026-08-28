@@ -655,6 +655,21 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             });
             return;
           }
+          case "bot.deleted":
+            yield* projectionBotRepository.deleteById({ botId: event.payload.botId });
+            return;
+          case "group.member-unassigned": {
+            const existing = yield* projectionBotRepository.getById({
+              botId: event.payload.botId,
+            });
+            if (Option.isNone(existing) || existing.value.groupId !== event.payload.groupId) return;
+            yield* projectionBotRepository.upsert({
+              ...existing.value,
+              groupId: null,
+              updatedAt: event.payload.updatedAt,
+            });
+            return;
+          }
           default:
             return;
         }
@@ -721,6 +736,25 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
               ),
               updatedAt: event.payload.updatedAt,
             });
+            return;
+          }
+          case "bot.deleted": {
+            const groups = yield* projectionGroupRepository.listAll();
+            yield* Effect.forEach(
+              groups.filter(
+                (group) =>
+                  group.bossBotId === event.payload.botId ||
+                  group.members.some((member) => member.botId === event.payload.botId),
+              ),
+              (group) =>
+                projectionGroupRepository.upsert({
+                  ...group,
+                  bossBotId: group.bossBotId === event.payload.botId ? null : group.bossBotId,
+                  members: group.members.filter((member) => member.botId !== event.payload.botId),
+                  updatedAt: event.payload.deletedAt,
+                }),
+              { discard: true },
+            );
             return;
           }
           case "group.boss-set": {

@@ -266,11 +266,9 @@ export function requireGroupMember(input: {
     const group = yield* requireGroup(input);
     const member = group.members.find((entry) => entry.botId === input.botId);
     if (!member) {
-      return yield* Effect.fail(
-        invariantError(
-          input.command.type,
-          `Bot '${input.botId}' is not a member of group '${input.groupId}'.`,
-        ),
+      return yield* invariantError(
+        input.command.type,
+        `Bot '${input.botId}' is not a member of group '${input.groupId}'.`,
       );
     }
     return yield* requireBot(input);

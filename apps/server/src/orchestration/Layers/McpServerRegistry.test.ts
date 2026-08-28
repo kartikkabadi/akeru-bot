@@ -115,6 +115,31 @@ registryLayer("MCP server registry", (it) => {
       }),
   );
 
+  it.effect("preserves hosted OAuth metadata when a plugin is created", () =>
+    Effect.gen(function* () {
+      const engine = yield* OrchestrationEngineService;
+      const snapshots = yield* ProjectionSnapshotQuery;
+      const mcpServerId = McpServerId.make("builtin-context");
+
+      yield* engine.dispatch({
+        type: "mcp-server.create",
+        commandId: CommandId.make("cmd-context-create"),
+        mcpServerId,
+        name: "Context.dev",
+        transport: "url",
+        url: "https://mcp.context.dev/mcp",
+        authentication: "oauth",
+        createdAt: "2026-08-27T00:00:00.000Z",
+      });
+
+      const snapshot = yield* snapshots.getShellSnapshot();
+      assert.equal(snapshot.mcpServers?.[0]?.transport, "url");
+      if (snapshot.mcpServers?.[0]?.transport === "url") {
+        assert.equal(snapshot.mcpServers[0].authentication, "oauth");
+      }
+    }),
+  );
+
   it.effect("rejects duplicate creates and commands against a missing id", () =>
     Effect.gen(function* () {
       const engine = yield* OrchestrationEngineService;

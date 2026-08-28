@@ -19,6 +19,7 @@ import type {
   OrchestrationThreadDetailSnapshot,
   OrchestrationThreadDetailWindow,
   OrchestrationThreadShell,
+  ProviderConversationMessage,
   ProjectId,
   ThreadId,
 } from "@t3tools/contracts";
@@ -171,6 +172,15 @@ export interface ProjectionSnapshotQueryShape {
   ) => Effect.Effect<Option.Option<OrchestrationThread>, ProjectionRepositoryError>;
 
   /**
+   * Read conversation-only history from the durable projection. This excludes
+   * system rows, streaming output, tool activity, and assistant output from
+   * failed or interrupted turns.
+   */
+  readonly getThreadConversationHistory?: (
+    threadId: ThreadId,
+  ) => Effect.Effect<ReadonlyArray<ProviderConversationMessage>, ProjectionRepositoryError>;
+
+  /**
    * Read a single active thread detail together with the projection snapshot
    * sequence in one consistent transaction, so the returned `snapshotSequence`
    * exactly matches the state reflected in `thread` (no interleaving projector
@@ -194,4 +204,4 @@ export interface ProjectionSnapshotQueryShape {
 export class ProjectionSnapshotQuery extends Context.Service<
   ProjectionSnapshotQuery,
   ProjectionSnapshotQueryShape
->()("t3/orchestration/Services/ProjectionSnapshotQuery") {}
+>()("akeru-bot/orchestration/Services/ProjectionSnapshotQuery") {}

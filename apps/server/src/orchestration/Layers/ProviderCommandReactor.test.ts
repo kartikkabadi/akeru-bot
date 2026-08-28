@@ -17,6 +17,8 @@ import {
   CommandId,
   DEFAULT_PROVIDER_INTERACTION_MODE,
   EventId,
+  GroupId,
+  McpServerId,
   MessageId,
   ProjectId,
   ThreadId,
@@ -56,6 +58,7 @@ import { OrchestrationProjectionSnapshotQueryLive } from "./ProjectionSnapshotQu
 import * as ThreadBackgroundLiveness from "../ThreadBackgroundLiveness.ts";
 import * as ThreadPlanProgress from "../ThreadPlanProgress.ts";
 import {
+  makeAkeruMemoryResourceId,
   providerErrorLabel,
   providerErrorLabelFromInstanceHint,
   ProviderCommandReactorLive,
@@ -107,6 +110,42 @@ describe("ProviderCommandReactor", () => {
     ).toBe("bot-specialist");
     expect(resolveControllerBotId({ botId: BotId.make("bot-owner"), respondingBotId: null })).toBe(
       "bot-owner",
+    );
+  });
+
+  it("scopes memory to the environment, project, owner, and Akeru thread", () => {
+    const direct = makeAkeruMemoryResourceId({
+      environmentId: "environment-a",
+      thread: {
+        id: ThreadId.make("thread-a"),
+        projectId: ProjectId.make("project-a"),
+        botId: BotId.make("bot-a"),
+        groupId: null,
+      },
+    });
+    const group = makeAkeruMemoryResourceId({
+      environmentId: "environment-a",
+      thread: {
+        id: ThreadId.make("thread-group"),
+        projectId: ProjectId.make("project-a"),
+        botId: null,
+        groupId: GroupId.make("group-a"),
+      },
+    });
+
+    expect(direct).toContain("environment:environment-a:project:project-a:bot:bot-a");
+    expect(group).toContain("project:project-a:group:group-a:thread:thread-group");
+    expect(direct).not.toBe(group);
+    expect(direct).not.toBe(
+      makeAkeruMemoryResourceId({
+        environmentId: "environment-b",
+        thread: {
+          id: ThreadId.make("thread-a"),
+          projectId: ProjectId.make("project-a"),
+          botId: BotId.make("bot-a"),
+          groupId: null,
+        },
+      }),
     );
   });
   let runtime: ManagedRuntime.ManagedRuntime<
@@ -179,8 +218,10 @@ describe("ProviderCommandReactor", () => {
     const baseDir =
       input?.baseDir ?? NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3code-reactor-"));
     createdBaseDirs.add(baseDir);
-    const { stateDir } = deriveServerPathsSync(baseDir, undefined);
+    const { stateDir, environmentIdPath } = deriveServerPathsSync(baseDir, undefined);
     createdStateDirs.add(stateDir);
+    NodeFS.mkdirSync(stateDir, { recursive: true });
+    NodeFS.writeFileSync(environmentIdPath, "environment-test\n");
     const runtimeEventPubSub = Effect.runSync(PubSub.unbounded<ProviderRuntimeEvent>());
     let nextSessionIndex = 1;
     const runtimeSessions: Array<ProviderSession> = [];
@@ -250,7 +291,7 @@ describe("ProviderCommandReactor", () => {
         ),
       );
     });
-    const sendTurn = vi.fn((_: unknown) =>
+    const sendTurn = vi.fn<AgentControllerShape["sendTurn"]>((_) =>
       Effect.succeed({
         threadId: ThreadId.make("thread-1"),
         turnId: asTurnId("turn-1"),
@@ -635,12 +676,306 @@ describe("ProviderCommandReactor", () => {
       botSandbox: null,
       runtimeMode: "approval-required",
     });
+    expect(harness.sendTurn.mock.calls[0]?.[0]).toMatchObject({
+      input: "hello reactor",
+      conversationContext: {
+        resourceId:
+          "akeru-memory:v1:environment:environment-test:project:project-1:owner:unassigned:thread:thread-1",
+        threadId: ThreadId.make("thread-1"),
+        messages: [],
+      },
+    });
 
     const readModel = await harness.readModel();
     const thread = readModel.threads.find((entry) => entry.id === ThreadId.make("thread-1"));
     expect(thread?.session?.threadId).toBe("thread-1");
     expect(thread?.session?.status).toBe("starting");
     expect(thread?.session?.runtimeMode).toBe("approval-required");
+  });
+
+  it("invalidates active sessions as soon as the global MCP registry changes", async () => {
+    const harness = await createHarness();
+    const now = "2026-01-01T00:00:00.000Z";
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.make("cmd-turn-start-before-mcp-create"),
+        threadId: ThreadId.make("thread-1"),
+        message: {
+          messageId: asMessageId("user-message-before-mcp-create"),
+          role: "user",
+          text: "before plugin",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: now,
+      }),
+    );
+    await waitFor(() => harness.startSession.mock.calls.length === 1);
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "mcp-server.create",
+        commandId: CommandId.make("cmd-context-create"),
+        mcpServerId: McpServerId.make("builtin-context"),
+        name: "Context.dev",
+        transport: "url",
+        url: "https://mcp.context.dev/mcp",
+        createdAt: now,
+      }),
+    );
+
+    await waitFor(() => harness.stopSession.mock.calls.length === 1);
+    expect(harness.stopSession).toHaveBeenCalledWith({ threadId: ThreadId.make("thread-1") });
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.make("cmd-turn-start-after-mcp-create"),
+        threadId: ThreadId.make("thread-1"),
+        message: {
+          messageId: asMessageId("user-message-after-mcp-create"),
+          role: "user",
+          text: "after plugin",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: now,
+      }),
+    );
+
+    await waitFor(() => harness.startSession.mock.calls.length === 2);
+    await waitFor(() => harness.sendTurn.mock.calls.length === 2);
+    expect(harness.startSession.mock.calls[1]?.[1]).toMatchObject({
+      mcpServers: [
+        {
+          id: McpServerId.make("builtin-context"),
+          name: "Context.dev",
+          transport: "url",
+          url: "https://mcp.context.dev/mcp",
+          enabled: true,
+        },
+      ],
+    });
+    expect(
+      harness.sendTurn.mock.calls[1]?.[0]?.conversationContext?.messages.map(
+        (message) => message.text,
+      ),
+    ).toEqual(["before plugin"]);
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "mcp-server.disable",
+        commandId: CommandId.make("cmd-context-disable"),
+        mcpServerId: McpServerId.make("builtin-context"),
+      }),
+    );
+    await waitFor(() => harness.stopSession.mock.calls.length === 2);
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.make("cmd-turn-start-after-mcp-disable"),
+        threadId: ThreadId.make("thread-1"),
+        message: {
+          messageId: asMessageId("user-message-after-mcp-disable"),
+          role: "user",
+          text: "after plugin disable",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: now,
+      }),
+    );
+    await waitFor(() => harness.startSession.mock.calls.length === 3);
+    await waitFor(() => harness.sendTurn.mock.calls.length === 3);
+    expect(harness.startSession.mock.calls[2]?.[1]).toMatchObject({ mcpServers: [] });
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "mcp-server.enable",
+        commandId: CommandId.make("cmd-context-enable"),
+        mcpServerId: McpServerId.make("builtin-context"),
+      }),
+    );
+    await waitFor(() => harness.stopSession.mock.calls.length === 3);
+  });
+
+  it("invalidates a bot session when its plugin exclusions change", async () => {
+    const harness = await createHarness({
+      botEngine: { provider: "codex", model: "gpt-5-codex" },
+    });
+    const now = "2026-01-01T00:00:00.000Z";
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "mcp-server.create",
+        commandId: CommandId.make("cmd-context-create-for-bot"),
+        mcpServerId: McpServerId.make("builtin-context"),
+        name: "Context.dev",
+        transport: "url",
+        url: "https://mcp.context.dev/mcp",
+        createdAt: now,
+      }),
+    );
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.make("cmd-turn-start-before-bot-plugin-disable"),
+        threadId: ThreadId.make("thread-1"),
+        message: {
+          messageId: asMessageId("user-message-before-bot-plugin-disable"),
+          role: "user",
+          text: "before bot plugin disable",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: now,
+      }),
+    );
+    await waitFor(() => harness.startSession.mock.calls.length === 1);
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "bot.update",
+        commandId: CommandId.make("cmd-bot-disable-context"),
+        botId: BotId.make("bot-1"),
+        disabledMcpServerIds: [McpServerId.make("builtin-context")],
+      }),
+    );
+
+    await waitFor(() => harness.stopSession.mock.calls.length === 1);
+    expect(harness.stopSession).toHaveBeenCalledWith({ threadId: ThreadId.make("thread-1") });
+  });
+
+  it.each(["archive", "delete"] as const)(
+    "stops a bot session when the bot is %sd",
+    async (lifecycleAction) => {
+      const harness = await createHarness({
+        botEngine: { provider: "codex", model: "gpt-5-codex" },
+      });
+      const now = "2026-01-01T00:00:00.000Z";
+
+      await Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.turn.start",
+          commandId: CommandId.make(`cmd-turn-start-before-bot-${lifecycleAction}`),
+          threadId: ThreadId.make("thread-1"),
+          message: {
+            messageId: asMessageId(`user-message-before-bot-${lifecycleAction}`),
+            role: "user",
+            text: `before bot ${lifecycleAction}`,
+            attachments: [],
+          },
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          runtimeMode: "approval-required",
+          createdAt: now,
+        }),
+      );
+      await waitFor(() => harness.startSession.mock.calls.length === 1);
+      await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+
+      if (lifecycleAction === "archive") {
+        await Effect.runPromise(
+          harness.engine.dispatch({
+            type: "bot.archive",
+            commandId: CommandId.make("cmd-bot-archive-active-session"),
+            botId: BotId.make("bot-1"),
+          }),
+        );
+      } else {
+        await Effect.runPromise(
+          harness.engine.dispatch({
+            type: "bot.delete",
+            commandId: CommandId.make("cmd-bot-delete-active-session"),
+            botId: BotId.make("bot-1"),
+          }),
+        );
+      }
+
+      await waitFor(() => harness.stopSession.mock.calls.length === 1);
+      expect(harness.stopSession).toHaveBeenCalledWith({ threadId: ThreadId.make("thread-1") });
+    },
+  );
+
+  it("keeps one durable history across Codex to Claude to Codex provider switches", async () => {
+    const harness = await createHarness({
+      botEngine: { provider: "codex", model: "gpt-5-codex" },
+    });
+    const threadId = ThreadId.make("thread-1");
+    const send = async (commandId: string, messageId: string, text: string, createdAt: string) => {
+      await Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.turn.start",
+          commandId: CommandId.make(commandId),
+          threadId,
+          message: {
+            messageId: asMessageId(messageId),
+            role: "user",
+            text,
+            attachments: [],
+          },
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          runtimeMode: "approval-required",
+          createdAt,
+        }),
+      );
+    };
+
+    await send("cmd-switch-codex", "message-codex", "Codex fact", "2026-01-01T00:00:00.000Z");
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "bot.update",
+        commandId: CommandId.make("cmd-switch-bot-to-claude"),
+        botId: BotId.make("bot-1"),
+        engine: { provider: "claudeAgent", model: "claude-fable-5" },
+      }),
+    );
+    await send(
+      "cmd-switch-claude",
+      "message-claude",
+      "Claude follow-up",
+      "2026-01-01T00:00:01.000Z",
+    );
+    await waitFor(() => harness.sendTurn.mock.calls.length === 2);
+
+    const claudeContext = harness.sendTurn.mock.calls[1]?.[0]?.conversationContext;
+    expect(claudeContext?.messages.map((message) => message.text)).toEqual(["Codex fact"]);
+    expect(claudeContext?.messages.map((message) => message.text)).not.toContain(
+      "Claude follow-up",
+    );
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "bot.update",
+        commandId: CommandId.make("cmd-switch-bot-to-codex"),
+        botId: BotId.make("bot-1"),
+        engine: { provider: "codex", model: "gpt-5-codex" },
+      }),
+    );
+    await send(
+      "cmd-switch-codex-back",
+      "message-codex-back",
+      "Codex return",
+      "2026-01-01T00:00:02.000Z",
+    );
+    await waitFor(() => harness.sendTurn.mock.calls.length === 3);
+
+    const codexContext = harness.sendTurn.mock.calls[2]?.[0]?.conversationContext;
+    expect(codexContext?.resourceId).toBe(claudeContext?.resourceId);
+    expect(codexContext?.messages.map((message) => message.text)).toEqual([
+      "Codex fact",
+      "Claude follow-up",
+    ]);
+    expect(codexContext?.messages.map((message) => message.text)).not.toContain("Codex return");
   });
 
   it("uses the configured bot engine instead of the thread default", async () => {
@@ -2601,7 +2936,7 @@ describe("ProviderCommandReactor", () => {
     const harness = await createHarness();
     const now = "2026-01-01T00:00:00.000Z";
 
-    await Effect.runPromise(
+    await harness.runEffect(
       harness.engine.dispatch({
         type: "thread.session.set",
         commandId: CommandId.make("cmd-session-set-stopped-provider-switch"),
@@ -2620,7 +2955,7 @@ describe("ProviderCommandReactor", () => {
       }),
     );
 
-    await Effect.runPromise(
+    await harness.runEffect(
       harness.engine.dispatch({
         type: "thread.turn.start",
         commandId: CommandId.make("cmd-turn-start-stopped-provider-switch"),
@@ -2661,7 +2996,7 @@ describe("ProviderCommandReactor", () => {
     const harness = await createHarness();
     const now = "2026-01-01T00:00:00.000Z";
 
-    await Effect.runPromise(
+    await harness.runEffect(
       harness.engine.dispatch({
         type: "thread.session.set",
         commandId: CommandId.make("cmd-session-set"),
@@ -2679,7 +3014,7 @@ describe("ProviderCommandReactor", () => {
       }),
     );
 
-    await Effect.runPromise(
+    await harness.runEffect(
       harness.engine.dispatch({
         type: "thread.turn.interrupt",
         commandId: CommandId.make("cmd-turn-interrupt"),
@@ -2911,7 +3246,7 @@ describe("ProviderCommandReactor", () => {
     const harness = await createHarness();
     const now = "2026-01-01T00:00:00.000Z";
 
-    await Effect.runPromise(
+    await harness.runEffect(
       harness.engine.dispatch({
         type: "thread.session.set",
         commandId: CommandId.make("cmd-session-set-stale"),
@@ -2929,7 +3264,7 @@ describe("ProviderCommandReactor", () => {
       }),
     );
 
-    await Effect.runPromise(
+    await harness.runEffect(
       harness.engine.dispatch({
         type: "thread.turn.start",
         commandId: CommandId.make("cmd-turn-start-stale"),
@@ -2966,7 +3301,7 @@ describe("ProviderCommandReactor", () => {
     const harness = await createHarness();
     const now = "2026-01-01T00:00:00.000Z";
 
-    await Effect.runPromise(
+    await harness.runEffect(
       harness.engine.dispatch({
         type: "thread.session.set",
         commandId: CommandId.make("cmd-session-set-missing-instance"),
@@ -2994,7 +3329,7 @@ describe("ProviderCommandReactor", () => {
       updatedAt: now,
     });
 
-    await Effect.runPromise(
+    await harness.runEffect(
       harness.engine.dispatch({
         type: "thread.turn.start",
         commandId: CommandId.make("cmd-turn-start-missing-instance"),
@@ -3037,7 +3372,7 @@ describe("ProviderCommandReactor", () => {
     const harness = await createHarness();
     const now = "2026-01-01T00:00:00.000Z";
 
-    await Effect.runPromise(
+    await harness.runEffect(
       harness.engine.dispatch({
         type: "thread.session.set",
         commandId: CommandId.make("cmd-session-set-for-approval"),
@@ -3055,7 +3390,7 @@ describe("ProviderCommandReactor", () => {
       }),
     );
 
-    await Effect.runPromise(
+    await harness.runEffect(
       harness.engine.dispatch({
         type: "thread.approval.respond",
         commandId: CommandId.make("cmd-approval-respond"),
@@ -3078,7 +3413,7 @@ describe("ProviderCommandReactor", () => {
     const harness = await createHarness();
     const now = "2026-01-01T00:00:00.000Z";
 
-    await Effect.runPromise(
+    await harness.runEffect(
       harness.engine.dispatch({
         type: "thread.session.set",
         commandId: CommandId.make("cmd-session-set-for-user-input"),
@@ -3096,7 +3431,7 @@ describe("ProviderCommandReactor", () => {
       }),
     );
 
-    await Effect.runPromise(
+    await harness.runEffect(
       harness.engine.dispatch({
         type: "thread.user-input.respond",
         commandId: CommandId.make("cmd-user-input-respond"),
@@ -3132,7 +3467,7 @@ describe("ProviderCommandReactor", () => {
       ),
     );
 
-    await Effect.runPromise(
+    await harness.runEffect(
       harness.engine.dispatch({
         type: "thread.session.set",
         commandId: CommandId.make("cmd-session-set-for-approval-error"),
@@ -3150,7 +3485,7 @@ describe("ProviderCommandReactor", () => {
       }),
     );
 
-    await Effect.runPromise(
+    await harness.runEffect(
       harness.engine.dispatch({
         type: "thread.activity.append",
         commandId: CommandId.make("cmd-approval-requested"),
@@ -3171,7 +3506,7 @@ describe("ProviderCommandReactor", () => {
       }),
     );
 
-    await Effect.runPromise(
+    await harness.runEffect(
       harness.engine.dispatch({
         type: "thread.approval.respond",
         commandId: CommandId.make("cmd-approval-respond-stale"),
@@ -3227,7 +3562,7 @@ describe("ProviderCommandReactor", () => {
       ),
     );
 
-    await Effect.runPromise(
+    await harness.runEffect(
       harness.engine.dispatch({
         type: "thread.session.set",
         commandId: CommandId.make("cmd-session-set-for-user-input-error"),
@@ -3245,7 +3580,7 @@ describe("ProviderCommandReactor", () => {
       }),
     );
 
-    await Effect.runPromise(
+    await harness.runEffect(
       harness.engine.dispatch({
         type: "thread.activity.append",
         commandId: CommandId.make("cmd-user-input-requested"),
@@ -3278,7 +3613,7 @@ describe("ProviderCommandReactor", () => {
       }),
     );
 
-    await Effect.runPromise(
+    await harness.runEffect(
       harness.engine.dispatch({
         type: "thread.user-input.respond",
         commandId: CommandId.make("cmd-user-input-respond-stale"),

@@ -29,6 +29,7 @@ import * as Stream from "effect/Stream";
 import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
 
 import { resolveThreadWorkspaceCwd } from "../../checkpointing/Utils.ts";
+import { ServerConfig } from "../../config.ts";
 import { increment, orchestrationEventsProcessedTotal } from "../../observability/Metrics.ts";
 import {
   AgentControllerUnsupportedEngineError,
@@ -64,6 +65,24 @@ export function resolveControllerBotId(
   return thread.respondingBotId ?? thread.botId ?? null;
 }
 
+export function makeAkeruMemoryResourceId(input: {
+  readonly environmentId: string;
+  readonly thread: Pick<OrchestrationThread, "id" | "projectId" | "botId" | "groupId">;
+}): string {
+  const owner = input.thread.groupId
+    ? `group:${input.thread.groupId}`
+    : input.thread.botId
+      ? `bot:${input.thread.botId}`
+      : "owner:unassigned";
+  return [
+    "akeru-memory:v1",
+    `environment:${input.environmentId}`,
+    `project:${input.thread.projectId}`,
+    owner,
+    `thread:${input.thread.id}`,
+  ].join(":");
+}
+
 type ProviderIntentEvent = Extract<
   OrchestrationEvent,
   {
@@ -77,6 +96,23 @@ type ProviderIntentEvent = Extract<
       | "thread.session-stop-requested";
   }
 >;
+
+type ProviderSessionInvalidationEvent = Extract<
+  OrchestrationEvent,
+  {
+    type:
+      | "bot.updated"
+      | "bot.archived"
+      | "bot.deleted"
+      | "mcp-server.created"
+      | "mcp-server.updated"
+      | "mcp-server.deleted"
+      | "mcp-server.enabled"
+      | "mcp-server.disabled";
+  }
+>;
+
+type ProviderReactorEvent = ProviderIntentEvent | ProviderSessionInvalidationEvent;
 
 function toNonEmptyProviderInput(value: string | undefined): string | undefined {
   const normalized = value?.trim();
@@ -326,6 +362,11 @@ const make = Effect.gen(function* () {
   const vcsStatusBroadcaster = yield* VcsStatusBroadcaster;
   const textGeneration = yield* TextGeneration;
   const serverSettingsService = yield* ServerSettingsService;
+  const serverConfig = yield* ServerConfig;
+  const environmentId = yield* fileSystem.readFileString(serverConfig.environmentIdPath).pipe(
+    Effect.map((value) => value.trim() || serverConfig.stateDir),
+    Effect.orElseSucceed(() => serverConfig.stateDir),
+  );
   const serverCommandId = (tag: string) =>
     crypto.randomUUIDv4.pipe(Effect.map((uuid) => CommandId.make(`server:${tag}:${uuid}`)));
   const serverEventId = () => crypto.randomUUIDv4.pipe(Effect.map(EventId.make));
@@ -814,6 +855,7 @@ const make = Effect.gen(function* () {
 
   const buildSendTurnRequestForThread = Effect.fnUntraced(function* (input: {
     readonly threadId: ThreadId;
+    readonly messageId: string;
     readonly messageText: string;
     readonly attachments?: ReadonlyArray<ChatAttachment>;
     readonly modelSelection?: ModelSelection;
@@ -826,6 +868,20 @@ const make = Effect.gen(function* () {
         new Error(`Thread '${input.threadId}' was not found in read model.`),
       );
     }
+    const conversationHistory = projectionSnapshotQuery.getThreadConversationHistory
+      ? yield* projectionSnapshotQuery.getThreadConversationHistory(input.threadId)
+      : thread.messages.flatMap((message) =>
+          (message.role === "user" || message.role === "assistant") && !message.streaming
+            ? [
+                {
+                  id: String(message.id),
+                  role: message.role,
+                  text: message.text,
+                  createdAt: message.createdAt,
+                },
+              ]
+            : [],
+        );
     const ensured = yield* ensureSessionForThread(input.threadId, input.createdAt, {
       ...(input.modelSelection !== undefined ? { modelSelection: input.modelSelection } : {}),
       pendingTurnStart: true,
@@ -874,6 +930,14 @@ const make = Effect.gen(function* () {
       ...(normalizedAttachments.length > 0 ? { attachments: normalizedAttachments } : {}),
       ...(modelForTurn !== undefined ? { modelSelection: modelForTurn } : {}),
       ...(input.interactionMode !== undefined ? { interactionMode: input.interactionMode } : {}),
+      conversationContext: {
+        resourceId: makeAkeruMemoryResourceId({
+          environmentId: String(environmentId),
+          thread,
+        }),
+        threadId: input.threadId,
+        messages: conversationHistory.filter((entry) => entry.id !== input.messageId),
+      },
     };
   });
 
@@ -1250,6 +1314,7 @@ const make = Effect.gen(function* () {
 
     const sendTurnRequest = yield* buildSendTurnRequestForThread({
       threadId: event.payload.threadId,
+      messageId: String(message.id),
       messageText: message.text,
       ...(message.attachments !== undefined ? { attachments: message.attachments } : {}),
       ...(event.payload.modelSelection !== undefined
@@ -1485,16 +1550,58 @@ const make = Effect.gen(function* () {
     });
   });
 
-  const processDomainEvent = Effect.fn("processDomainEvent")(function* (
-    event: ProviderIntentEvent,
+  const invalidateProviderSessions = Effect.fn("invalidateProviderSessions")(function* (
+    event: ProviderSessionInvalidationEvent,
   ) {
+    if (event.type === "bot.updated" && event.payload.disabledMcpServerIds === undefined) {
+      return;
+    }
+    const activeSessions = yield* agentController.listSessions();
+    for (const session of activeSessions) {
+      if (
+        event.type === "bot.updated" ||
+        event.type === "bot.archived" ||
+        event.type === "bot.deleted"
+      ) {
+        const thread = yield* resolveThread(session.threadId);
+        if (!thread || resolveControllerBotId(thread) !== event.payload.botId) {
+          continue;
+        }
+      }
+      yield* agentController.stopSession({ threadId: session.threadId }).pipe(
+        Effect.catchCause((cause) =>
+          Effect.logWarning("provider session invalidation failed", {
+            eventType: event.type,
+            threadId: session.threadId,
+            cause: Cause.pretty(cause),
+          }),
+        ),
+      );
+    }
+  });
+
+  const processDomainEvent = Effect.fn("processDomainEvent")(function* (
+    event: ProviderReactorEvent,
+  ) {
+    yield* increment(orchestrationEventsProcessedTotal, {
+      eventType: event.type,
+    });
+    switch (event.type) {
+      case "bot.updated":
+      case "bot.archived":
+      case "bot.deleted":
+      case "mcp-server.created":
+      case "mcp-server.updated":
+      case "mcp-server.deleted":
+      case "mcp-server.enabled":
+      case "mcp-server.disabled":
+        yield* invalidateProviderSessions(event);
+        return;
+    }
     yield* Effect.annotateCurrentSpan({
       "orchestration.event_type": event.type,
       "orchestration.thread_id": event.payload.threadId,
       ...(event.commandId ? { "orchestration.command_id": event.commandId } : {}),
-    });
-    yield* increment(orchestrationEventsProcessedTotal, {
-      eventType: event.type,
     });
     switch (event.type) {
       case "thread.meta-updated":
@@ -1531,7 +1638,7 @@ const make = Effect.gen(function* () {
     }
   });
 
-  const processDomainEventSafely = (event: ProviderIntentEvent) =>
+  const processDomainEventSafely = (event: ProviderReactorEvent) =>
     processDomainEvent(event).pipe(
       Effect.catchCause((cause) => {
         if (Cause.hasInterruptsOnly(cause)) {
@@ -1566,7 +1673,15 @@ const make = Effect.gen(function* () {
         event.type === "thread.turn-interrupt-requested" ||
         event.type === "thread.approval-response-requested" ||
         event.type === "thread.user-input-response-requested" ||
-        event.type === "thread.session-stop-requested"
+        event.type === "thread.session-stop-requested" ||
+        event.type === "mcp-server.created" ||
+        event.type === "mcp-server.updated" ||
+        event.type === "mcp-server.deleted" ||
+        event.type === "mcp-server.enabled" ||
+        event.type === "mcp-server.disabled" ||
+        event.type === "bot.archived" ||
+        event.type === "bot.deleted" ||
+        (event.type === "bot.updated" && event.payload.disabledMcpServerIds !== undefined)
       ) {
         return yield* worker.enqueue(event);
       }

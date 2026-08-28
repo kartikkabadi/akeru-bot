@@ -12,6 +12,7 @@ import {
 } from "@t3tools/contracts";
 import {
   ApprovalRequestId,
+  BotId,
   CommandId,
   DEFAULT_PROVIDER_INTERACTION_MODE,
   EventId,
@@ -19,6 +20,7 @@ import {
   type OrchestrationCommand,
   ProjectId,
   ProviderItemId,
+  RuntimeRequestId,
   type ServerSettings,
   ThreadId,
   TurnId,
@@ -100,6 +102,7 @@ function isLegacyTurnCompletedEvent(
 function createAgentControllerHarness() {
   const runtimeEventPubSub = Effect.runSync(PubSub.unbounded<ProviderRuntimeEvent>());
   const runtimeSessions: ProviderSession[] = [];
+  const interruptTurnCalls: Parameters<AgentControllerShape["interruptTurn"]>[0][] = [];
 
   const unsupported = () => Effect.die(new Error("Unsupported provider call in test")) as never;
   const service: AgentControllerShape = {
@@ -107,7 +110,10 @@ function createAgentControllerHarness() {
     inspectEngine: () => unsupported(),
     startSession: () => unsupported(),
     sendTurn: () => unsupported(),
-    interruptTurn: () => unsupported(),
+    interruptTurn: (input) =>
+      Effect.sync(() => {
+        interruptTurnCalls.push(input);
+      }),
     respondToRequest: () => unsupported(),
     respondToUserInput: () => unsupported(),
     stopSession: () => unsupported(),
@@ -151,6 +157,7 @@ function createAgentControllerHarness() {
     service,
     emit,
     setSession,
+    interruptTurnCalls,
   };
 }
 
@@ -214,6 +221,7 @@ describe("ProviderRuntimeIngestion", () => {
   async function createHarness(options?: {
     serverSettings?: Partial<ServerSettings>;
     threadTitle?: string;
+    botUsageCap?: number;
   }) {
     const workspaceRoot = makeTempDir("t3-provider-project-");
     NodeFS.mkdirSync(NodePath.join(workspaceRoot, ".git"));
@@ -265,11 +273,28 @@ describe("ProviderRuntimeIngestion", () => {
       },
       createdAt,
     });
+    if (options?.botUsageCap !== undefined) {
+      await dispatch({
+        type: "bot.create",
+        commandId: CommandId.make("cmd-provider-bot-create"),
+        botId: BotId.make("usage-capped-bot"),
+        name: "Capped bot",
+        title: "Capped bot",
+        avatar: { kind: "dither", seed: "capped-bot" },
+        engine: { provider: "codex", model: "gpt-5-codex" },
+        sandbox: "local",
+        runtimeMode: "approval-required",
+        usageCap: { unit: "tokens", limit: options.botUsageCap },
+        groupId: null,
+        createdAt,
+      });
+    }
     await dispatch({
       type: "thread.create",
       commandId: CommandId.make("cmd-thread-create"),
       threadId: ThreadId.make("thread-1"),
       projectId: asProjectId("project-1"),
+      ...(options?.botUsageCap !== undefined ? { botId: BotId.make("usage-capped-bot") } : {}),
       title: options?.threadTitle ?? "Thread",
       modelSelection: {
         instanceId: ProviderInstanceId.make("codex"),
@@ -311,6 +336,7 @@ describe("ProviderRuntimeIngestion", () => {
       readModel: () => Effect.runPromise(snapshotQuery.getSnapshot()),
       emit: provider.emit,
       setProviderSession: provider.setSession,
+      interruptTurnCalls: provider.interruptTurnCalls,
       drain,
     };
   }
@@ -592,6 +618,128 @@ describe("ProviderRuntimeIngestion", () => {
         expect(thread.session?.status).toBe("running");
         expect(thread.session?.activeTurnId).toBe(asTurnId("turn-after-reconnect"));
       }),
+  );
+
+  it("expires unanswered user-input requests when a new turn starts", async () => {
+    const harness = await createHarness();
+    const now = "2026-01-01T00:00:00.000Z";
+
+    harness.emit({
+      type: "user-input.requested",
+      eventId: asEventId("evt-stale-user-input-requested"),
+      provider: ProviderDriverKind.make("codex"),
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-with-question"),
+      requestId: RuntimeRequestId.make("stale-question-1"),
+      createdAt: now,
+      payload: {
+        questions: [
+          {
+            id: "stale-question-1",
+            header: "Question",
+            question: "Coffee or tea?",
+            options: [],
+            multiSelect: false,
+          },
+        ],
+      },
+    });
+    await waitForThread(harness.readModel, (thread) =>
+      thread.activities.some((activity) => activity.kind === "user-input.requested"),
+    );
+
+    harness.emit({
+      type: "turn.started",
+      eventId: asEventId("evt-turn-started-after-stale-question"),
+      provider: ProviderDriverKind.make("codex"),
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-after-question"),
+      createdAt: "2026-01-01T00:01:00.000Z",
+    });
+
+    const thread = await waitForThread(harness.readModel, (entry) =>
+      entry.activities.some((activity) => activity.kind === "user-input.resolved"),
+    );
+    const resolved = thread.activities.find((activity) => activity.kind === "user-input.resolved");
+    expect(resolved?.payload).toMatchObject({ requestId: "stale-question-1" });
+  });
+
+  effectIt.effect("keeps a pending turn starting while the provider restarts its session", () =>
+    Effect.gen(function* () {
+      const harness = yield* Effect.promise(() => createHarness());
+      const threadId = asThreadId("thread-1");
+
+      yield* harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.make("cmd-turn-start-session-restart"),
+        threadId,
+        message: {
+          messageId: MessageId.make("message-session-restart"),
+          role: "user",
+          text: "restart the session for this turn",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: "2026-01-01T00:00:01.000Z",
+      });
+      yield* harness.engine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.make("cmd-session-starting-session-restart"),
+        threadId,
+        session: {
+          threadId,
+          status: "starting",
+          providerName: "codex",
+          runtimeMode: "approval-required",
+          activeTurnId: null,
+          lastError: null,
+          updatedAt: "2026-01-01T00:00:01.000Z",
+        },
+        createdAt: "2026-01-01T00:00:01.000Z",
+      });
+
+      harness.emit({
+        type: "session.state.changed",
+        eventId: asEventId("evt-session-stopped-session-restart"),
+        provider: ProviderDriverKind.make("codex"),
+        threadId,
+        createdAt: "2026-01-01T00:00:02.000Z",
+        payload: { state: "stopped" },
+      });
+      harness.emit({
+        type: "session.state.changed",
+        eventId: asEventId("evt-session-ready-session-restart"),
+        provider: ProviderDriverKind.make("codex"),
+        threadId,
+        createdAt: "2026-01-01T00:00:03.000Z",
+        payload: { state: "ready" },
+      });
+
+      yield* Effect.promise(() => harness.drain());
+      let thread = (yield* Effect.promise(() => harness.readModel())).threads.find(
+        (entry) => entry.id === threadId,
+      );
+      expect(thread?.session?.status).toBe("starting");
+
+      harness.emit({
+        type: "turn.started",
+        eventId: asEventId("evt-turn-started-session-restart"),
+        provider: ProviderDriverKind.make("codex"),
+        threadId,
+        turnId: asTurnId("turn-after-session-restart"),
+        createdAt: "2026-01-01T00:00:04.000Z",
+      });
+      thread = yield* Effect.promise(() =>
+        waitForThread(
+          harness.readModel,
+          (entry) =>
+            entry.session?.status === "running" &&
+            entry.session.activeTurnId === asTurnId("turn-after-session-restart"),
+        ),
+      );
+      expect(thread.session?.status).toBe("running");
+    }),
   );
 
   effectIt.effect("keeps an aborted pending start stopped across duplicate exit events", () =>
@@ -3022,6 +3170,57 @@ describe("ProviderRuntimeIngestion", () => {
     const readModel = await harness.readModel();
     const thread = readModel.threads.find((entry) => entry.id === ThreadId.make("thread-1"));
     expect(thread?.title).toBe("User-set title");
+  });
+
+  it("interrupts only the bot turn that reaches its token cap", async () => {
+    const harness = await createHarness({ botUsageCap: 1_000 });
+    const now = "2026-01-01T00:00:00.000Z";
+    const turnId = asTurnId("usage-capped-turn");
+
+    await harness.dispatch({
+      type: "thread.turn.start",
+      commandId: CommandId.make("cmd-start-usage-capped-turn"),
+      threadId: asThreadId("thread-1"),
+      message: {
+        messageId: asMessageId("usage-capped-message"),
+        role: "user",
+        text: "Use the capped bot",
+        attachments: [],
+      },
+      interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+      runtimeMode: "approval-required",
+      createdAt: now,
+    });
+
+    harness.emit({
+      type: "thread.token-usage.updated",
+      eventId: asEventId("evt-usage-cap-reached"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId,
+      payload: {
+        usage: {
+          usedTokens: 1_000,
+          inputTokens: 900,
+          outputTokens: 100,
+          reasoningOutputTokens: 0,
+        },
+      },
+    });
+
+    await harness.drain();
+    expect(harness.interruptTurnCalls).toEqual([{ threadId: asThreadId("thread-1"), turnId }]);
+    const readModel = await harness.readModel();
+    const thread = readModel.threads.find((entry) => entry.id === asThreadId("thread-1"));
+    expect(thread?.activities).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: "runtime.error",
+          payload: expect.objectContaining({ class: "usage_cap" }),
+        }),
+      ]),
+    );
   });
 
   it("projects context window updates into normalized thread activities", async () => {

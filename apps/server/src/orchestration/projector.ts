@@ -19,6 +19,7 @@ import { toProjectorDecodeError, type OrchestrationProjectorDecodeError } from "
 import {
   BotArchivedPayload,
   BotCreatedPayload,
+  BotDeletedPayload,
   BotRestoredPayload,
   BotUpdatedPayload,
   GroupBossSetPayload,
@@ -392,6 +393,25 @@ export function projectEvent(
         })),
       );
 
+    case "bot.deleted":
+      return decodeForEvent(BotDeletedPayload, event.payload, event.type, "payload").pipe(
+        Effect.map((payload) => ({
+          ...nextBase,
+          bots: nextBase.bots.filter((bot) => bot.id !== payload.botId),
+          groups: nextBase.groups.map((group) =>
+            group.bossBotId === payload.botId ||
+            group.members.some((member) => member.botId === payload.botId)
+              ? {
+                  ...group,
+                  bossBotId: group.bossBotId === payload.botId ? null : group.bossBotId,
+                  members: group.members.filter((member) => member.botId !== payload.botId),
+                  updatedAt: payload.deletedAt,
+                }
+              : group,
+          ),
+        })),
+      );
+
     case "group.created":
       return decodeForEvent(GroupCreatedPayload, event.payload, event.type, "payload").pipe(
         Effect.map((payload) => {
@@ -455,6 +475,10 @@ export function projectEvent(
       ).pipe(
         Effect.map((payload) => ({
           ...nextBase,
+          bots: updateBot(nextBase.bots, payload.botId, {
+            groupId: null,
+            updatedAt: payload.updatedAt,
+          }),
           groups: updateGroup(nextBase.groups, payload.groupId, {
             members:
               nextBase.groups

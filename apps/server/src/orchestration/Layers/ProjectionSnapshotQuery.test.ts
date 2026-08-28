@@ -496,6 +496,53 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
     }),
   );
 
+  it.effect("reads only safe settled conversation messages for provider context", () =>
+    Effect.gen(function* () {
+      const snapshotQuery = yield* ProjectionSnapshotQuery;
+      const sql = yield* SqlClient.SqlClient;
+
+      yield* sql`DELETE FROM projection_thread_messages`;
+      yield* sql`DELETE FROM projection_turns`;
+      yield* sql`
+        INSERT INTO projection_thread_messages (
+          message_id, thread_id, turn_id, role, text, is_streaming, created_at, updated_at
+        ) VALUES
+          ('history-user', 'history-thread', NULL, 'user', 'Remember Kyoto.', 0, '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z'),
+          ('history-assistant-ok', 'history-thread', 'turn-ok', 'assistant', 'Kyoto remembered.', 0, '2026-01-01T00:00:01.000Z', '2026-01-01T00:00:01.000Z'),
+          ('history-assistant-failed', 'history-thread', 'turn-failed', 'assistant', 'Partial failed answer.', 0, '2026-01-01T00:00:02.000Z', '2026-01-01T00:00:02.000Z'),
+          ('history-assistant-streaming', 'history-thread', 'turn-running', 'assistant', 'Partial stream.', 1, '2026-01-01T00:00:03.000Z', '2026-01-01T00:00:03.000Z'),
+          ('history-system', 'history-thread', NULL, 'system', 'Hidden controller note.', 0, '2026-01-01T00:00:04.000Z', '2026-01-01T00:00:04.000Z')
+      `;
+      yield* sql`
+        INSERT INTO projection_turns (
+          thread_id, turn_id, assistant_message_id, state, requested_at, checkpoint_files_json
+        ) VALUES
+          ('history-thread', 'turn-ok', 'history-assistant-ok', 'completed', '2026-01-01T00:00:00.000Z', '[]'),
+          ('history-thread', 'turn-failed', 'history-assistant-failed', 'error', '2026-01-01T00:00:01.000Z', '[]'),
+          ('history-thread', 'turn-running', 'history-assistant-streaming', 'running', '2026-01-01T00:00:02.000Z', '[]')
+      `;
+
+      const getThreadConversationHistory = snapshotQuery.getThreadConversationHistory;
+      assert.isDefined(getThreadConversationHistory);
+      const history = yield* getThreadConversationHistory(ThreadId.make("history-thread"));
+
+      assert.deepEqual(history, [
+        {
+          id: "history-user",
+          role: "user",
+          text: "Remember Kyoto.",
+          createdAt: "2026-01-01T00:00:00.000Z",
+        },
+        {
+          id: "history-assistant-ok",
+          role: "assistant",
+          text: "Kyoto remembered.",
+          createdAt: "2026-01-01T00:00:01.000Z",
+        },
+      ]);
+    }),
+  );
+
   it.effect("keeps archived threads out of the main shell snapshot", () =>
     Effect.gen(function* () {
       const snapshotQuery = yield* ProjectionSnapshotQuery;
@@ -2410,12 +2457,14 @@ projectionSnapshotLayer("ProjectionSnapshotQuery windowed thread detail", (it) =
       const detailWithPinnedRequests = yield* snapshotQuery.getThreadDetailById(threadW);
       assert.equal(detailWithPinnedRequests._tag, "Some");
       if (detailWithPinnedRequests._tag === "Some") {
-        const ids = detailWithPinnedRequests.value.activities.map((activity) => activity.id);
+        const ids = new Set(
+          detailWithPinnedRequests.value.activities.map((activity) => activity.id),
+        );
         assert.equal(detailWithPinnedRequests.value.activities.length, 503);
-        assert.equal(ids.includes(asEventId("approval-old")), true);
-        assert.equal(ids.includes(asEventId("user-input-old")), true);
-        assert.equal(ids.includes(asEventId("user-input-closed")), false);
-        assert.equal(ids.includes(asEventId("user-input-tied-z-request")), true);
+        assert.equal(ids.has(asEventId("approval-old")), true);
+        assert.equal(ids.has(asEventId("user-input-old")), true);
+        assert.equal(ids.has(asEventId("user-input-closed")), false);
+        assert.equal(ids.has(asEventId("user-input-tied-z-request")), true);
       }
 
       const windowWithPinnedRequests = yield* snapshotQuery.getThreadDetailSnapshot(threadW, {
@@ -2423,12 +2472,14 @@ projectionSnapshotLayer("ProjectionSnapshotQuery windowed thread detail", (it) =
       });
       assert.equal(windowWithPinnedRequests._tag, "Some");
       if (windowWithPinnedRequests._tag === "Some") {
-        const ids = windowWithPinnedRequests.value.thread.activities.map((activity) => activity.id);
+        const ids = new Set(
+          windowWithPinnedRequests.value.thread.activities.map((activity) => activity.id),
+        );
         assert.equal(windowWithPinnedRequests.value.thread.activities.length, 503);
-        assert.equal(ids.includes(asEventId("approval-old")), true);
-        assert.equal(ids.includes(asEventId("user-input-old")), true);
-        assert.equal(ids.includes(asEventId("user-input-closed")), false);
-        assert.equal(ids.includes(asEventId("user-input-tied-z-request")), true);
+        assert.equal(ids.has(asEventId("approval-old")), true);
+        assert.equal(ids.has(asEventId("user-input-old")), true);
+        assert.equal(ids.has(asEventId("user-input-closed")), false);
+        assert.equal(ids.has(asEventId("user-input-tied-z-request")), true);
       }
     }),
   );

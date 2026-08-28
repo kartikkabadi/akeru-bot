@@ -18,6 +18,7 @@ import {
   OrchestrationThread,
   OrchestrationThreadDetailSnapshot,
   ProjectScript,
+  ProviderConversationMessage,
   TurnId,
   type OrchestrationCheckpointSummary,
   type OrchestrationBot,
@@ -165,6 +166,7 @@ const ProjectIdLookupInput = Schema.Struct({
 const ThreadIdLookupInput = Schema.Struct({
   threadId: ThreadId,
 });
+const ProviderConversationMessageRowSchema = ProviderConversationMessage;
 // Windowed reads order turns by the stable keyset (anchor, turn key), where
 // anchor is requested_at and turn key is
 // COALESCE(turn_id, ''). Both are event-derived, so cursors survive the
@@ -1097,6 +1099,34 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
         FROM projection_thread_messages
         WHERE thread_id = ${threadId}
         ORDER BY created_at ASC, message_id ASC
+      `,
+  });
+
+  const listProviderConversationRowsByThread = SqlSchema.findAll({
+    Request: ThreadIdLookupInput,
+    Result: ProviderConversationMessageRowSchema,
+    execute: ({ threadId }) =>
+      sql`
+        SELECT
+          messages.message_id AS id,
+          messages.role,
+          messages.text,
+          messages.created_at AS "createdAt"
+        FROM projection_thread_messages AS messages
+        WHERE messages.thread_id = ${threadId}
+          AND messages.role IN ('user', 'assistant')
+          AND messages.is_streaming = 0
+          AND (
+            messages.role = 'user'
+            OR EXISTS (
+              SELECT 1
+              FROM projection_turns AS turns
+              WHERE turns.thread_id = messages.thread_id
+                AND turns.assistant_message_id = messages.message_id
+                AND turns.state = 'completed'
+            )
+          )
+        ORDER BY messages.created_at ASC, messages.message_id ASC
       `,
   });
 
@@ -2968,6 +2998,18 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
   const getThreadDetailById: ProjectionSnapshotQueryShape["getThreadDetailById"] = (threadId) =>
     getThreadDetailByIdBounded(threadId, undefined);
 
+  const getThreadConversationHistory: NonNullable<
+    ProjectionSnapshotQueryShape["getThreadConversationHistory"]
+  > = (threadId) =>
+    listProviderConversationRowsByThread({ threadId }).pipe(
+      Effect.mapError(
+        toPersistenceSqlOrDecodeError(
+          "ProjectionSnapshotQuery.getThreadConversationHistory:query",
+          "ProjectionSnapshotQuery.getThreadConversationHistory:decodeRows",
+        ),
+      ),
+    );
+
   // Bounds pathological fan-out: one user turn that spawned hundreds of
   // subagent turns still pages in bounded chunks, at the cost of splitting the
   // fan-out group across pages (the cursor continues the same group). Also
@@ -3125,6 +3167,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
     getFullThreadDiffContext,
     getThreadShellById,
     getThreadDetailById,
+    getThreadConversationHistory,
     getThreadDetailSnapshot,
   } satisfies ProjectionSnapshotQueryShape;
 });

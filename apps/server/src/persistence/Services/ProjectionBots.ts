@@ -44,9 +44,12 @@ export interface ProjectionBotRepositoryShape {
     input: GetProjectionBotInput,
   ) => Effect.Effect<Option.Option<ProjectionBot>, ProjectionRepositoryError>;
   readonly listAll: () => Effect.Effect<ReadonlyArray<ProjectionBot>, ProjectionRepositoryError>;
+  readonly deleteById: (
+    input: GetProjectionBotInput,
+  ) => Effect.Effect<void, ProjectionRepositoryError>;
 }
 
 export class ProjectionBotRepository extends Context.Service<
   ProjectionBotRepository,
   ProjectionBotRepositoryShape
->()("t3/persistence/Services/ProjectionBots/ProjectionBotRepository") {}
+>()("akeru-bot/persistence/Services/ProjectionBots/ProjectionBotRepository") {}
