@@ -29,6 +29,7 @@ describe("legacy settings deep links", () => {
   it("maps a known settings path onto its section", () => {
     expect(settingsSectionFromPathname("/settings/connections")).toBe("connections");
     expect(settingsSectionFromPathname("/settings/sandbox")).toBe("sandbox");
+    expect(settingsSectionFromPathname("/settings/voice")).toBe("voice");
     expect(settingsSectionFromPathname("/settings/source-control")).toBe("source-control");
   });
 

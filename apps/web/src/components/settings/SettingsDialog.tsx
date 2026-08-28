@@ -1,5 +1,6 @@
 import {
   BotIcon,
+  CallIcon,
   KeyboardIcon,
   Link02Icon,
   PaintBrush01Icon,
@@ -27,6 +28,9 @@ const ProvidersPanel = lazy(async () => ({
 const SandboxSettingsPanel = lazy(async () => ({
   default: (await import("./SandboxSettingsPanel")).SandboxSettingsPanel,
 }));
+const VoiceSettingsPanel = lazy(async () => ({
+  default: (await import("./VoiceSettings")).VoiceSettingsPanel,
+}));
 const ConnectionsSettings = lazy(async () => ({
   default: (await import("./ConnectionsSettings")).ConnectionsSettings,
 }));
@@ -45,6 +49,7 @@ const SECTION_PANELS: Readonly<Record<SettingsSection, ComponentType>> = {
   appearance: AppearanceSettingsPanel,
   providers: ProvidersPanel,
   sandbox: SandboxSettingsPanel,
+  voice: VoiceSettingsPanel,
   connections: ConnectionsSettings,
   keybindings: KeybindingsSettingsPanel,
   "source-control": SourceControlSettingsPanel,
@@ -61,6 +66,7 @@ const NAV_ITEMS: ReadonlyArray<{
   { section: "appearance", label: "Appearance", icon: PaintBrush01Icon },
   { section: "providers", label: "Providers", icon: BotIcon },
   { section: "sandbox", label: "Sandbox", icon: ServerIcon },
+  { section: "voice", label: "Voice", icon: CallIcon },
   { section: "connections", label: "Connections", icon: Link02Icon },
   { section: "keybindings", label: "Keybindings", icon: KeyboardIcon },
 ];

@@ -18,6 +18,7 @@ import {
   PreviewViewportSetting,
   PreviewZoomFactor,
 } from "./preview.ts";
+import { VoiceProvider, ChatGptRealtimeVoice, VoiceSettings } from "./voiceCall.ts";
 import {
   ProviderInstanceConfig,
   ProviderInstanceEnvironmentVariable,
@@ -693,6 +694,7 @@ export const ServerSettings = Schema.Struct({
    * between a desktop window and a phone attached to the same server.
    */
   enableAgentBrowserAccess: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
+  voice: VoiceSettings,
   backgroundActivity: BackgroundActivitySettings,
   // Legacy flat fields retained for old settings files and old clients. New
   // consumers should resolve `backgroundActivity` instead.
@@ -927,6 +929,13 @@ export const ServerSettingsPatch = Schema.Struct({
   enableLegacyTokenStreaming: Schema.optionalKey(Schema.Boolean),
   enableProviderUpdateChecks: Schema.optionalKey(Schema.Boolean),
   enableAgentBrowserAccess: Schema.optionalKey(Schema.Boolean),
+  voice: Schema.optionalKey(
+    Schema.Struct({
+      enabled: Schema.optionalKey(Schema.Boolean),
+      provider: Schema.optionalKey(VoiceProvider),
+      voice: Schema.optionalKey(ChatGptRealtimeVoice),
+    }),
+  ),
   backgroundActivity: Schema.optionalKey(
     Schema.Struct({
       schemaVersion: Schema.optionalKey(Schema.Literal(1)),

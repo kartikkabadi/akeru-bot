@@ -34,6 +34,7 @@ export interface Bot {
   sandbox: "local" | "e2b" | "daytona" | "vercel" | "upstash" | null;
   runtimeMode: "approval-required" | "auto-accept-edits" | "auto" | "full-access";
   usageCap: { unit: "tokens"; limit: number } | null;
+  voiceEnabled: boolean;
   groupId: string | null;
   pinned: boolean;
   archivedAt: string | null;

@@ -868,10 +868,12 @@ const make = (options?: AgentControllerLiveOptions) =>
         );
       }
       yield* runMastra("respondToToolApproval", () =>
-        active.session.respondToToolApproval({
-          toolCallId,
-          decision: approvalDecision(input.decision, sensitiveAction),
-        }),
+        Promise.resolve().then(() =>
+          active.session.respondToToolApproval({
+            toolCallId,
+            decision: approvalDecision(input.decision, sensitiveAction),
+          }),
+        ),
       );
       if (active.activeTurn) active.activeTurn.waiting = false;
       active.sensitiveToolCalls.delete(toolCallId);

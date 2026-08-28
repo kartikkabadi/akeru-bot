@@ -14,6 +14,7 @@ export const SETTINGS_SECTIONS = [
   "appearance",
   "providers",
   "sandbox",
+  "voice",
   "connections",
   "keybindings",
   "source-control",

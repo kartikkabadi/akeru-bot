@@ -55,6 +55,7 @@ const stubBot = {
   sandbox: "local" as const,
   runtimeMode: "full-access" as const,
   usageCap: null,
+  voiceEnabled: false,
   groupId: null,
   archivedAt: null,
   createdAt: "2026-04-01T00:00:00.000Z",

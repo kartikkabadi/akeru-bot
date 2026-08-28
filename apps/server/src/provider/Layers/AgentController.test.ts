@@ -132,6 +132,7 @@ function makeMastraHarness() {
         resolveSend = resolve;
       }),
   );
+  const respondToToolApproval = vi.fn(() => undefined);
   const session = {
     state: { set: vi.fn(async () => undefined) },
     mode: {
@@ -156,7 +157,7 @@ function makeMastraHarness() {
     }),
     sendMessage,
     abort: vi.fn(),
-    respondToToolApproval: vi.fn(async () => undefined),
+    respondToToolApproval,
     respondToToolSuspension: vi.fn(async () => undefined),
   } as unknown as Session<Record<string, unknown>>;
   const createSession = vi.fn(async (_input: unknown) => session as never);
@@ -181,6 +182,7 @@ function makeMastraHarness() {
     factory,
     harnessOptions,
     session,
+    respondToToolApproval,
     createSession,
     deleteSession,
     sendMessage,
@@ -873,9 +875,9 @@ describe("AgentControllerLive", () => {
         decision: "approve",
       });
 
-      mastra.session.respondToToolApproval.mockRejectedValueOnce(
-        new Error("Injected automatic approval failure."),
-      );
+      mastra.respondToToolApproval.mockImplementationOnce(() => {
+        throw new Error("Injected automatic approval failure.");
+      });
       mastra.emit({
         type: "tool_approval_required",
         toolCallId: "failed-cloud-auto-approval",
@@ -891,9 +893,9 @@ describe("AgentControllerLive", () => {
             String(event.requestId) === "failed-cloud-auto-approval",
         ),
       );
-      mastra.session.respondToToolApproval.mockRejectedValueOnce(
-        new Error("Injected manual approval failure."),
-      );
+      mastra.respondToToolApproval.mockImplementationOnce(() => {
+        throw new Error("Injected manual approval failure.");
+      });
       const approvalError = yield* Effect.flip(
         controller.respondToRequest({
           threadId: codexThreadId,
