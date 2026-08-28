@@ -623,6 +623,7 @@ describe("ProviderCommandReactor", () => {
         model: "gpt-5-codex",
       },
       mode: "default",
+      botConversation: false,
     });
     expect(harness.startSession.mock.calls[0]?.[0]).toEqual(ThreadId.make("thread-1"));
     expect(harness.startSession.mock.calls[0]?.[1]).toMatchObject({
@@ -633,6 +634,7 @@ describe("ProviderCommandReactor", () => {
       },
       mcpServers: [],
       botSandbox: null,
+      botConversation: false,
       runtimeMode: "approval-required",
     });
 
@@ -675,6 +677,7 @@ describe("ProviderCommandReactor", () => {
         model: "claude-fable-5",
       },
       mode: "default",
+      botConversation: true,
     });
     expect(harness.startSession.mock.calls[0]?.[1]).toMatchObject({
       provider: ProviderDriverKind.make("claudeAgent"),
@@ -684,6 +687,7 @@ describe("ProviderCommandReactor", () => {
         model: "claude-fable-5",
       },
       botSandbox: "local",
+      botConversation: true,
     });
   });
 

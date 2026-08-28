@@ -521,6 +521,7 @@ const make = Effect.gen(function* () {
       engine,
       fallback,
       mode: thread.interactionMode,
+      botConversation: thread.botId != null || thread.groupId != null,
     });
     return { ...selection, configured: engine !== null };
   });
@@ -697,6 +698,7 @@ const make = Effect.gen(function* () {
         modelSelection: desiredModelSelection,
         mcpServers,
         botSandbox: respondingBot?.sandbox ?? null,
+        botConversation: thread.botId != null || thread.groupId != null,
         ...(input?.resumeCursor !== undefined ? { resumeCursor: input.resumeCursor } : {}),
         runtimeMode: desiredRuntimeMode,
       });

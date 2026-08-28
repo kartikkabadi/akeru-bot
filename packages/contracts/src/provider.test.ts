@@ -55,9 +55,11 @@ describe("ProviderSessionStartInput", () => {
       threadId: "thread-1",
       provider: "codex",
       botSandbox: "vercel",
+      botConversation: true,
       runtimeMode: "full-access",
     });
     expect(parsed.botSandbox).toBe("vercel");
+    expect(parsed.botConversation).toBe(true);
   });
 
   it("rejects payloads without runtime mode", () => {

@@ -9,13 +9,14 @@ import { createCodingAgent } from "@mastra/core/coding-agent";
 import type { RequestContext } from "@mastra/core/request-context";
 import { createWorkspaceTools, type Workspace } from "@mastra/core/workspace";
 
-import { AKERU_AGENT_INSTRUCTIONS } from "./AkeruAgentInstructions.ts";
+import { AKERU_AGENT_INSTRUCTIONS, AKERU_BOT_INSTRUCTIONS } from "./AkeruAgentInstructions.ts";
 
 const DEFAULT_MODEL_ID = "openai/gpt-5.6-sol";
 
 export interface AkeruMastraState {
   readonly projectPath?: string;
   readonly yolo?: boolean;
+  readonly botConversation?: boolean;
 }
 
 export type AkeruMastraSession = Session<AkeruMastraState>;
@@ -56,6 +57,16 @@ function controllerResourceId(requestContext: RequestContext): string | undefine
   return typeof value === "string" ? value : undefined;
 }
 
+export function resolveAkeruInstructions(requestContext: RequestContext): string {
+  const state = controllerContext(requestContext)?.state;
+  return typeof state === "object" &&
+    state !== null &&
+    "botConversation" in state &&
+    state.botConversation === true
+    ? AKERU_BOT_INSTRUCTIONS
+    : AKERU_AGENT_INSTRUCTIONS;
+}
+
 function codexModelName(modelId: string): string {
   return modelId.startsWith("openai/") ? modelId.slice("openai/".length) : modelId;
 }
@@ -90,7 +101,7 @@ export async function createAkeruMastraHarness(
   const agent = createCodingAgent({
     id: "akeru-agent",
     name: "Akeru",
-    instructions: AKERU_AGENT_INSTRUCTIONS,
+    instructions: ({ requestContext }) => resolveAkeruInstructions(requestContext),
     model: ({ requestContext }) =>
       openaiCodexProvider(codexModelName(controllerModelId(requestContext)), {
         authStorage: options.authStorage,

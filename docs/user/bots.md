@@ -13,4 +13,6 @@ Akeru Bot stores the profile in the connected environment. Other clients connect
 
 Use the panel button to collapse or reopen the editor. The default shortcut is **Mod+Alt+B**, and you can change `Right Panel: Toggle` in the keybinding settings. On a narrow screen, the same button opens a sheet.
 
+When a request needs tools, the bot first replies in plain language. During longer work, it adds short status notes after meaningful progress. When work resumes automatically, it continues without a repeated opening note.
+
 Bot replies support headings, links, tables, task lists, code blocks, math, and Mermaid diagrams.
