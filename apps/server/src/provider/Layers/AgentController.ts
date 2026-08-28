@@ -589,67 +589,70 @@ const make = (options?: AgentControllerLiveOptions) =>
         yield* runMastra("mcp.init", () => manager.init());
         mcpManagers.set(key, manager);
       }
-      const workspaceLease = yield* runMastra("workspace.acquire", async () => {
-        const create = async () => {
-          const workspace = await createBotWorkspace({
-            threadId: resourceScope,
-            ...(input.cwd ? { cwd: input.cwd } : {}),
-            ...(input.botSandbox !== undefined ? { sandbox: input.botSandbox } : {}),
-            ...(options?.makeRemoteWorkspace
-              ? { makeRemoteWorkspace: options.makeRemoteWorkspace }
-              : {}),
-          });
-          if (!workspace) throw new Error(`Workspace is unavailable for thread '${key}'.`);
-          return workspace;
-        };
+      const session = yield* Effect.gen(function* () {
+        const workspaceLease = yield* runMastra("workspace.acquire", async () => {
+          const create = async () => {
+            const workspace = await createBotWorkspace({
+              threadId: resourceScope,
+              ...(input.cwd ? { cwd: input.cwd } : {}),
+              ...(input.botSandbox !== undefined ? { sandbox: input.botSandbox } : {}),
+              ...(options?.makeRemoteWorkspace
+                ? { makeRemoteWorkspace: options.makeRemoteWorkspace }
+                : {}),
+            });
+            if (!workspace) throw new Error(`Workspace is unavailable for thread '${key}'.`);
+            return workspace;
+          };
 
-        if (isRemoteBotSandbox(input.botSandbox) || input.cwd) {
-          return workspacePool.acquire(workspaceResourceKey, create);
+          if (isRemoteBotSandbox(input.botSandbox) || input.cwd) {
+            return workspacePool.acquire(workspaceResourceKey, create);
+          }
+          return undefined;
+        });
+        const workspace = workspaceLease?.workspace;
+        if (workspaceLease) {
+          workspaces.set(key, workspaceLease.workspace);
+          workspaceLeases.set(key, workspaceLease);
         }
-        return undefined;
-      });
-      const workspace = workspaceLease?.workspace;
-      if (workspaceLease) {
-        workspaces.set(key, workspaceLease.workspace);
-        workspaceLeases.set(key, workspaceLease);
-      }
-      const session = yield* runMastra("createSession", () =>
-        bundle.controller.createSession({
-          id: key,
-          ownerId: "akeru-desktop",
-          resourceId: key,
-          threadId: key,
-          ...(input.cwd ? { tags: { projectPath: input.cwd } } : {}),
-          ...(workspace ? { workspace } : {}),
-        }),
-      ).pipe(
+        const session = yield* runMastra("createSession", () =>
+          bundle.controller.createSession({
+            id: key,
+            ownerId: "akeru-desktop",
+            resourceId: key,
+            threadId: key,
+            ...(input.cwd ? { tags: { projectPath: input.cwd } } : {}),
+            ...(workspace ? { workspace } : {}),
+          }),
+        );
+        yield* runMastra("state.set", () =>
+          session.state.set({
+            ...(input.cwd ? { projectPath: input.cwd } : {}),
+            yolo: input.runtimeMode === "full-access" || input.runtimeMode === "auto",
+          }),
+        );
+        yield* runMastra("model.switch", () =>
+          session.model.switch({ modelId: resolved.mastraModelId }),
+        );
+        const modeId = mastraModeId(resolved.mode);
+        if (session.mode.get() !== modeId) {
+          yield* runMastra("mode.switch", () => session.mode.switch({ modeId }));
+        }
+        yield* Effect.forEach(
+          ["read", "edit", "execute", "mcp", "other"] as const,
+          (category) =>
+            runMastra("permissions.setForCategory", () =>
+              session.permissions.setForCategory({
+                category,
+                policy: permissionPolicy(input.runtimeMode, category),
+              }),
+            ),
+          { discard: true },
+        );
+        return session;
+      }).pipe(
         Effect.tapError(() =>
           Effect.all([disconnectMcpManager(key), disconnectWorkspace(key)], { discard: true }),
         ),
-      );
-      yield* runMastra("state.set", () =>
-        session.state.set({
-          ...(input.cwd ? { projectPath: input.cwd } : {}),
-          yolo: input.runtimeMode === "full-access" || input.runtimeMode === "auto",
-        }),
-      );
-      yield* runMastra("model.switch", () =>
-        session.model.switch({ modelId: resolved.mastraModelId }),
-      );
-      const modeId = mastraModeId(resolved.mode);
-      if (session.mode.get() !== modeId) {
-        yield* runMastra("mode.switch", () => session.mode.switch({ modeId }));
-      }
-      yield* Effect.forEach(
-        ["read", "edit", "execute", "mcp", "other"] as const,
-        (category) =>
-          runMastra("permissions.setForCategory", () =>
-            session.permissions.setForCategory({
-              category,
-              policy: permissionPolicy(input.runtimeMode, category),
-            }),
-          ),
-        { discard: true },
       );
       const createdAt = nowIso();
       const activeWithoutUnsubscribe = {

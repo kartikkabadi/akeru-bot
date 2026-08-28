@@ -129,8 +129,9 @@ function makeMastraHarness() {
         resolveSend = resolve;
       }),
   );
+  const stateSet = vi.fn(async () => undefined);
   const session = {
-    state: { set: vi.fn(async () => undefined) },
+    state: { set: stateSet },
     mode: {
       get: () => modeId,
       switch: vi.fn(async ({ modeId: next }: { readonly modeId: string }) => {
@@ -178,6 +179,7 @@ function makeMastraHarness() {
     factory,
     harnessOptions,
     session,
+    stateSet,
     createSession,
     deleteSession,
     sendMessage,
@@ -631,6 +633,64 @@ describe("AgentControllerLive", () => {
       });
       expect(mastra.createSession.mock.calls[0]?.[0]).toMatchObject({ workspace: remote });
       yield* controller.stopSession({ threadId: codexThreadId });
+    }).pipe(Effect.provide(layer), Effect.orDie);
+  });
+
+  it.effect("releases a remote workspace when session initialization fails", () => {
+    const bridge = makeBridge();
+    const mastra = makeMastraHarness();
+    const firstRemote = new Workspace({
+      filesystem: new LocalFilesystem({ basePath: process.cwd() }),
+      sandbox: new LocalSandbox({ workingDirectory: process.cwd() }),
+    });
+    const secondRemote = new Workspace({
+      filesystem: new LocalFilesystem({ basePath: process.cwd() }),
+      sandbox: new LocalSandbox({ workingDirectory: process.cwd() }),
+    });
+    const firstDestroy = vi.spyOn(firstRemote, "destroy");
+    const secondDestroy = vi.spyOn(secondRemote, "destroy");
+    const makeRemoteWorkspace = vi
+      .fn()
+      .mockResolvedValueOnce(firstRemote)
+      .mockResolvedValueOnce(secondRemote);
+    const layer = makeAgentControllerLive({
+      makeMastraHarness: mastra.factory,
+      makeRemoteWorkspace,
+    }).pipe(
+      Layer.provide(
+        Layer.merge(
+          Layer.succeed(LegacyProviderBridge, bridge.service),
+          ServerConfig.layerTest(process.cwd(), {
+            prefix: "akeru-mastra-failed-session-test-",
+          }).pipe(Layer.provide(NodeServices.layer)),
+        ),
+      ),
+    );
+
+    return Effect.gen(function* () {
+      const controller = yield* AgentController;
+      yield* resolveCodex(controller);
+      mastra.stateSet.mockRejectedValueOnce(new Error("state unavailable"));
+      const input = {
+        threadId: codexThreadId,
+        provider: ProviderDriverKind.make("codex"),
+        providerInstanceId: codexInstanceId,
+        modelSelection: codexSelection,
+        runtimeMode: "full-access" as const,
+        botId: BotId.make("bot-retry"),
+        botSandbox: "vercel" as const,
+        botSandboxBrowserSharing: "separate" as const,
+      };
+
+      yield* controller.startSession(codexThreadId, input).pipe(Effect.flip);
+      expect(firstDestroy).toHaveBeenCalledOnce();
+
+      yield* controller.startSession(codexThreadId, input);
+      expect(makeRemoteWorkspace).toHaveBeenCalledTimes(2);
+      expect(secondDestroy).not.toHaveBeenCalled();
+
+      yield* controller.stopSession({ threadId: codexThreadId });
+      expect(secondDestroy).toHaveBeenCalledOnce();
     }).pipe(Effect.provide(layer), Effect.orDie);
   });
 
