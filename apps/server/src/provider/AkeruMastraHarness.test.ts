@@ -41,6 +41,11 @@ describe("AkeruMastraHarness", () => {
     );
     assert.equal(criticalAkeruAction("api_request", { action: "delete" }), "delete");
     assert.equal(criticalAkeruAction("api_request", { method: "DELETE" }), "delete");
+    assert.equal(criticalAkeruAction("api_request", { requestType: "delete" }), "delete");
+    assert.equal(
+      criticalAkeruAction("api_request", { options: { deliveryMode: "broadcast" } }),
+      "send",
+    );
     assert.isTrue(akeruActionNeedsApproval("api_request", { verb: "dispatch" }));
     assert.isTrue(akeruActionNeedsApproval("api_request", { operation: "synchronize" }));
     assert.isFalse(akeruActionNeedsApproval("api_request", { method: "GET" }));

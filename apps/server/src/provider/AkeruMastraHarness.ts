@@ -100,18 +100,7 @@ function criticalActionFromText(value: string): AkeruCriticalAction | null {
   return null;
 }
 
-const CRITICAL_ARGUMENT_KEYS = new Set([
-  "action",
-  "operation",
-  "method",
-  "verb",
-  "command",
-  "cmd",
-  "environment",
-  "env",
-  "stage",
-  "target",
-]);
+const NON_ACTION_TEXT_KEYS = new Set(["content"]);
 const MUTATING_INTENT_KEYS = new Set(["action", "operation", "method", "verb"]);
 const READ_ONLY_INTENT_TOKENS = new Set([
   "get",
@@ -147,17 +136,17 @@ function inspectAkeruAction(toolName: string, args?: unknown): AkeruActionInspec
     if (typeof value !== "object" || value === null) continue;
     for (const [key, entry] of Object.entries(value)) {
       const normalizedKey = key.toLowerCase();
-      if (CRITICAL_ARGUMENT_KEYS.has(normalizedKey) && typeof entry === "string") {
-        const action = criticalActionFromText(`${key} ${entry}`);
+      if (!NON_ACTION_TEXT_KEYS.has(normalizedKey)) {
+        const action = criticalActionFromText(typeof entry === "string" ? `${key} ${entry}` : key);
         if (action) return { action, hasUnclassifiedIntent: false };
-        if (MUTATING_INTENT_KEYS.has(normalizedKey)) {
-          const tokens = entry
-            .toLowerCase()
-            .split(/[^a-z0-9]+/)
-            .filter(Boolean);
-          if (!tokens.some((token) => READ_ONLY_INTENT_TOKENS.has(token))) {
-            hasUnclassifiedIntent = true;
-          }
+      }
+      if (MUTATING_INTENT_KEYS.has(normalizedKey) && typeof entry === "string") {
+        const tokens = entry
+          .toLowerCase()
+          .split(/[^a-z0-9]+/)
+          .filter(Boolean);
+        if (!tokens.some((token) => READ_ONLY_INTENT_TOKENS.has(token))) {
+          hasUnclassifiedIntent = true;
         }
       }
       if (typeof entry === "object" && entry !== null) pending.push(entry);
