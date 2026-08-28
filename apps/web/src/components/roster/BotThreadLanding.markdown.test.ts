@@ -13,7 +13,7 @@ describe("BotThreadLanding message formatting", () => {
     expect(source).toContain("threadRef={runtime.linkedThreadRef ?? undefined}");
   });
 
-  it("uses the free-scrolling conversation area instead of end-justified overflow", () => {
+  it("uses the free-scrolling conversation area and follows submitted messages", () => {
     const botSource = NodeFS.readFileSync(
       new URL("./BotThreadLanding.tsx", import.meta.url),
       "utf8",
@@ -23,8 +23,10 @@ describe("BotThreadLanding message formatting", () => {
       "utf8",
     );
 
-    expect(botSource).toContain("<BotConversationScrollArea>");
-    expect(groupSource).toContain("<BotConversationScrollArea>");
+    expect(botSource).toContain("<BotConversationScrollArea followRevision={followRevision}>");
+    expect(groupSource).toContain("<BotConversationScrollArea followRevision={followRevision}>");
+    expect(botSource).toContain("<BotChoicePrompt");
+    expect(groupSource).toContain("<BotChoicePrompt");
     expect(botSource).not.toContain("justify-end gap-4");
     expect(groupSource).not.toContain("justify-end gap-4");
   });

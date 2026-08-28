@@ -28,18 +28,15 @@ class FakeElement {
   className = "";
   disabled = false;
   focused = false;
+  tabIndex = 0;
   type = "";
   private textValue = "";
   private readonly listeners = new Map<string, FakeListener[]>();
 
   constructor(readonly tagName: string) {}
 
-  get isConnected() {
-    let current: FakeElement | null = this;
-    while (current?.parent) {
-      current = current.parent;
-    }
-    return current?.tagName === "body";
+  get isConnected(): boolean {
+    return this.parent ? this.parent.isConnected : this.tagName === "body";
   }
 
   appendChild(child: FakeElement) {
@@ -67,6 +64,23 @@ class FakeElement {
 
   setAttribute(name: string, value: string) {
     this.attributes.set(name, value);
+  }
+
+  getAttribute(name: string) {
+    return this.attributes.get(name) ?? null;
+  }
+
+  contains(target: FakeElement | null) {
+    let current = target;
+    while (current) {
+      if (current === this) return true;
+      current = current.parent;
+    }
+    return false;
+  }
+
+  click() {
+    this.dispatchEvent(new FakeDomEvent("click"));
   }
 
   dispatchEvent(event: FakeDomEvent) {
@@ -174,6 +188,12 @@ class FakeDocument {
     }
   }
 
+  dispatchEvent(event: FakeDomEvent) {
+    for (const listener of this.listeners.get(event.type) ?? []) {
+      listener(event);
+    }
+  }
+
   querySelectorAll(tagName: string) {
     return this.body.querySelectorAll(tagName);
   }
@@ -230,6 +250,69 @@ describe("showContextMenuFallback", () => {
 
     expect(separators).toHaveLength(1);
     expect(separators[0]?.attributes.get("role")).toBe("separator");
+    dismissContextMenu();
+    await expect(selectionPromise).resolves.toBeNull();
+  });
+
+  it("focuses the first root item and supports arrow-key selection", async () => {
+    const selectionPromise = showContextMenuFallback([
+      { id: "rename", label: "Rename" },
+      { id: "duplicate", label: "Duplicate" },
+    ]);
+
+    const renameButton = findButton("Rename");
+    const duplicateButton = findButton("Duplicate");
+    expect(renameButton?.focused).toBe(true);
+    expect(renameButton?.attributes.get("role")).toBe("menuitem");
+
+    (document as unknown as FakeDocument).dispatchEvent(
+      new KeyboardEvent("keydown", { key: "ArrowDown" }),
+    );
+    expect(duplicateButton?.focused).toBe(true);
+    (document as unknown as FakeDocument).dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Home" }),
+    );
+    expect(renameButton?.focused).toBe(true);
+
+    renameButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    await expect(selectionPromise).resolves.toBe("rename");
+  });
+
+  it("closes on Tab so focus can continue from the invoker", async () => {
+    const invoker = (document as unknown as FakeDocument).createElement("button");
+    (document as unknown as FakeDocument).body.appendChild(invoker);
+    invoker.focus();
+    const selectionPromise = showContextMenuFallback([{ id: "rename", label: "Rename" }]);
+
+    const event = new KeyboardEvent("keydown", { key: "Tab" });
+    (document as unknown as FakeDocument).dispatchEvent(event);
+
+    await expect(selectionPromise).resolves.toBeNull();
+    expect(event.defaultPrevented).toBe(false);
+    expect(invoker.focused).toBe(true);
+  });
+
+  it("opens a focused submenu with ArrowRight and returns with ArrowLeft", async () => {
+    const selectionPromise = showContextMenuFallback([
+      {
+        id: "move",
+        label: "Move to",
+        children: [{ id: "move:group", label: "Product" }],
+      },
+    ]);
+
+    const parentButton = findButton("Move to");
+    expect(parentButton?.focused).toBe(true);
+    (document as unknown as FakeDocument).dispatchEvent(
+      new KeyboardEvent("keydown", { key: "ArrowRight" }),
+    );
+    expect(findButton("Product")?.focused).toBe(true);
+    (document as unknown as FakeDocument).dispatchEvent(
+      new KeyboardEvent("keydown", { key: "ArrowLeft" }),
+    );
+    expect(findButton("Product")).toBeUndefined();
+    expect(parentButton?.focused).toBe(true);
+
     dismissContextMenu();
     await expect(selectionPromise).resolves.toBeNull();
   });

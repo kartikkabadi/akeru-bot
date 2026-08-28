@@ -15,6 +15,7 @@
 import {
   DEFAULT_MODEL_BY_PROVIDER,
   defaultInstanceIdForDriver,
+  isAkeruRuntimeDriver,
   PROVIDER_DISPLAY_NAMES,
   resolveProviderInstanceEnabled,
   type ModelSelection,
@@ -72,7 +73,11 @@ export interface ProviderInstanceEntry {
  * `ready` probe status can remain in the streamed snapshot until reconciliation.
  */
 export function isProviderInstancePickerReady(entry: ProviderInstanceEntry): boolean {
-  return entry.enabled && entry.isAvailable && entry.status === "ready";
+  if (!entry.enabled || !entry.isAvailable || entry.snapshot.auth.status === "unauthenticated") {
+    return false;
+  }
+  if (entry.status === "ready") return true;
+  return isAkeruRuntimeDriver(entry.driverKind) && entry.models.length > 0;
 }
 
 /** Picker rails contain configured, enabled instances only. */

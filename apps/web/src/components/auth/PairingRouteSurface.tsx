@@ -2,7 +2,6 @@ import type { AuthSessionState } from "@t3tools/contracts";
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import React, { startTransition, useEffect, useRef, useState, useCallback } from "react";
 
-import { APP_DISPLAY_NAME } from "../../branding";
 import { connectPairing } from "../../connection/onboarding";
 import {
   peekPairingTokenFromUrl,
@@ -13,28 +12,16 @@ import { readHostedPairingRequest } from "../../hostedPairing";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { useAtomCommand } from "../../state/use-atom-command";
+import { AuthSurfaceShell } from "./AuthSurfaceShell";
 
 export function PairingPendingSurface() {
   return (
-    <div className="relative flex min-h-screen items-center justify-center overflow-hidden bg-background px-4 py-10 text-foreground sm:px-6">
-      <div className="pointer-events-none absolute inset-0 opacity-80">
-        <div className="absolute inset-x-0 top-0 h-44 bg-[radial-gradient(44rem_16rem_at_top,color-mix(in_srgb,var(--color-emerald-500)_14%,transparent),transparent)]" />
-        <div className="absolute inset-y-0 left-0 w-72 bg-[radial-gradient(28rem_18rem_at_left,color-mix(in_srgb,var(--color-sky-500)_10%,transparent),transparent)]" />
-        <div className="absolute inset-0 bg-[linear-gradient(145deg,color-mix(in_srgb,var(--background)_90%,var(--color-black))_0%,var(--background)_55%)]" />
-      </div>
-
-      <section className="relative w-full max-w-xl rounded-2xl border border-border/80 bg-card/90 p-6 shadow-2xl shadow-black/20 backdrop-blur-md sm:p-8">
-        <p className="text-[11px] font-semibold tracking-[0.18em] text-muted-foreground uppercase">
-          {APP_DISPLAY_NAME}
-        </p>
-        <h1 className="mt-3 text-2xl font-semibold tracking-tight sm:text-3xl">
-          Pairing with this environment
-        </h1>
-        <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
-          Validating the pairing link and preparing your session.
-        </p>
-      </section>
-    </div>
+    <AuthSurfaceShell>
+      <h1 className="text-xl font-medium tracking-tight">Pairing with this environment</h1>
+      <p className="mt-2 text-sm leading-6 text-muted-foreground">
+        Validating the pairing link and preparing your session.
+      </p>
+    </AuthSurfaceShell>
   );
 }
 
@@ -97,69 +84,59 @@ export function PairingRouteSurface({
   }, [submitCredential]);
 
   return (
-    <div className="relative flex min-h-screen items-center justify-center overflow-hidden bg-background px-4 py-10 text-foreground sm:px-6">
-      <div className="pointer-events-none absolute inset-0 opacity-80">
-        <div className="absolute inset-x-0 top-0 h-44 bg-[radial-gradient(44rem_16rem_at_top,color-mix(in_srgb,var(--color-emerald-500)_14%,transparent),transparent)]" />
-        <div className="absolute inset-y-0 left-0 w-72 bg-[radial-gradient(28rem_18rem_at_left,color-mix(in_srgb,var(--color-sky-500)_10%,transparent),transparent)]" />
-        <div className="absolute inset-0 bg-[linear-gradient(145deg,color-mix(in_srgb,var(--background)_90%,var(--color-black))_0%,var(--background)_55%)]" />
-      </div>
+    <AuthSurfaceShell>
+      <h1 className="text-xl font-medium tracking-tight">Pair with this environment</h1>
+      <p className="mt-2 text-sm leading-6 text-muted-foreground">
+        {describeAuthGate(auth.bootstrapMethods)}
+      </p>
 
-      <section className="relative w-full max-w-xl rounded-2xl border border-border/80 bg-card/90 p-6 shadow-2xl shadow-black/20 backdrop-blur-md sm:p-8">
-        <p className="text-[11px] font-semibold tracking-[0.18em] text-muted-foreground uppercase">
-          {APP_DISPLAY_NAME}
-        </p>
-        <h1 className="mt-3 text-2xl font-semibold tracking-tight sm:text-3xl">
-          Pair with this environment
-        </h1>
-        <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
-          {describeAuthGate(auth.bootstrapMethods)}
-        </p>
-
-        <form className="mt-6 space-y-4" onSubmit={(event) => void handleSubmit(event)}>
-          <div className="space-y-2">
-            <label className="text-sm font-medium" htmlFor="pairing-token">
-              Pairing token
-            </label>
-            <Input
-              id="pairing-token"
-              autoCapitalize="none"
-              autoComplete="off"
-              autoCorrect="off"
-              disabled={isSubmitting}
-              nativeInput
-              onChange={(event) => setCredential(event.currentTarget.value)}
-              placeholder="Paste a one-time token or pairing secret"
-              spellCheck={false}
-              value={credential}
-            />
-          </div>
-
-          {errorMessage ? (
-            <div className="rounded-lg border border-destructive/30 bg-destructive/6 px-3 py-2 text-sm text-destructive">
-              {errorMessage}
-            </div>
-          ) : null}
-
-          <div className="flex flex-wrap gap-2">
-            <Button disabled={isSubmitting} size="sm" type="submit">
-              {isSubmitting ? "Pairing..." : "Continue"}
-            </Button>
-            <Button
-              disabled={isSubmitting}
-              onClick={() => window.location.reload()}
-              size="sm"
-              variant="outline"
-            >
-              Reload app
-            </Button>
-          </div>
-        </form>
-
-        <div className="mt-6 rounded-lg border border-border/70 bg-background/55 px-3 py-3 text-xs leading-relaxed text-muted-foreground">
-          {describeSupportedMethods(auth.bootstrapMethods)}
+      <form
+        className="mt-6 w-full space-y-4 text-left"
+        onSubmit={(event) => void handleSubmit(event)}
+      >
+        <div className="space-y-2">
+          <label className="text-sm font-medium" htmlFor="pairing-token">
+            Pairing token
+          </label>
+          <Input
+            id="pairing-token"
+            autoCapitalize="none"
+            autoComplete="off"
+            autoCorrect="off"
+            disabled={isSubmitting}
+            nativeInput
+            onChange={(event) => setCredential(event.currentTarget.value)}
+            placeholder="Paste a one-time token or pairing secret"
+            spellCheck={false}
+            value={credential}
+          />
         </div>
-      </section>
-    </div>
+
+        {errorMessage ? (
+          <div className="rounded-lg border border-destructive/30 bg-destructive/6 px-3 py-2 text-sm text-destructive">
+            {errorMessage}
+          </div>
+        ) : null}
+
+        <div className="flex flex-wrap gap-2">
+          <Button disabled={isSubmitting} size="sm" type="submit">
+            {isSubmitting ? "Pairing..." : "Continue"}
+          </Button>
+          <Button
+            disabled={isSubmitting}
+            onClick={() => window.location.reload()}
+            size="sm"
+            variant="outline"
+          >
+            Reload app
+          </Button>
+        </div>
+      </form>
+
+      <div className="mt-6 w-full rounded-lg border border-border bg-card px-3 py-3 text-left text-xs leading-relaxed text-muted-foreground">
+        {describeSupportedMethods(auth.bootstrapMethods)}
+      </div>
+    </AuthSurfaceShell>
   );
 }
 
@@ -233,57 +210,46 @@ export function HostedPairingRouteSurface() {
   const request = hostedPairingRequestRef.current;
 
   return (
-    <div className="relative flex min-h-screen items-center justify-center overflow-hidden bg-background px-4 py-10 text-foreground sm:px-6">
-      <div className="pointer-events-none absolute inset-0 opacity-80">
-        <div className="absolute inset-x-0 top-0 h-44 bg-[radial-gradient(44rem_16rem_at_top,color-mix(in_srgb,var(--color-emerald-500)_14%,transparent),transparent)]" />
-        <div className="absolute inset-y-0 left-0 w-72 bg-[radial-gradient(28rem_18rem_at_left,color-mix(in_srgb,var(--color-sky-500)_10%,transparent),transparent)]" />
-        <div className="absolute inset-0 bg-[linear-gradient(145deg,color-mix(in_srgb,var(--background)_90%,var(--color-black))_0%,var(--background)_55%)]" />
-      </div>
+    <AuthSurfaceShell>
+      <h1 className="text-xl font-medium tracking-tight">
+        {status === "paired"
+          ? "Backend paired"
+          : status === "error"
+            ? "Pairing failed"
+            : "Pairing backend"}
+      </h1>
+      <p className="mt-2 text-sm leading-6 text-muted-foreground">{message}</p>
 
-      <section className="relative w-full max-w-xl rounded-2xl border border-border/80 bg-card/90 p-6 shadow-2xl shadow-black/20 backdrop-blur-md sm:p-8">
-        <p className="text-[11px] font-semibold tracking-[0.18em] text-muted-foreground uppercase">
-          {APP_DISPLAY_NAME}
-        </p>
-        <h1 className="mt-3 text-2xl font-semibold tracking-tight sm:text-3xl">
-          {status === "paired"
-            ? "Backend paired"
-            : status === "error"
-              ? "Pairing failed"
-              : "Pairing backend"}
-        </h1>
-        <p className="mt-2 text-sm leading-relaxed text-muted-foreground">{message}</p>
-
-        {request ? (
-          <div className="mt-5 rounded-lg border border-border/70 bg-background/55 px-3 py-3 text-xs leading-relaxed text-muted-foreground">
-            Host: <span className="font-mono text-foreground/80">{request.host}</span>
-          </div>
-        ) : null}
-
-        {status === "error" ? (
-          <div className="mt-5 rounded-lg border border-destructive/30 bg-destructive/6 px-3 py-2 text-sm text-destructive">
-            Verify the backend is reachable from this browser, supports CORS for hosted clients, and
-            is served over HTTPS when opening this page from HTTPS.
-          </div>
-        ) : null}
-
-        <div className="mt-6 flex flex-wrap gap-2">
-          {status === "pairing" ? (
-            <Button disabled size="sm">
-              Pairing...
-            </Button>
-          ) : canRetry ? (
-            <Button size="sm" onClick={() => void submitHostedPairingRequest()}>
-              Try again
-            </Button>
-          ) : null}
-          {status === "paired" ? (
-            <Button size="sm" variant="outline" onClick={() => (window.location.href = "/")}>
-              Open app
-            </Button>
-          ) : null}
+      {request ? (
+        <div className="mt-5 w-full rounded-lg border border-border bg-card px-3 py-3 text-left text-xs leading-relaxed text-muted-foreground">
+          Host: <span className="font-mono text-foreground/80">{request.host}</span>
         </div>
-      </section>
-    </div>
+      ) : null}
+
+      {status === "error" ? (
+        <div className="mt-5 w-full rounded-lg border border-destructive/30 bg-destructive/6 px-3 py-2 text-left text-sm text-destructive">
+          Verify the backend is reachable from this browser, supports CORS for hosted clients, and
+          is served over HTTPS when opening this page from HTTPS.
+        </div>
+      ) : null}
+
+      <div className="mt-5 flex flex-wrap justify-center gap-2">
+        {status === "pairing" ? (
+          <Button disabled size="sm">
+            Pairing...
+          </Button>
+        ) : canRetry ? (
+          <Button size="sm" onClick={() => void submitHostedPairingRequest()}>
+            Try again
+          </Button>
+        ) : null}
+        {status === "paired" ? (
+          <Button size="sm" variant="outline" onClick={() => (window.location.href = "/")}>
+            Open app
+          </Button>
+        ) : null}
+      </div>
+    </AuthSurfaceShell>
   );
 }
 

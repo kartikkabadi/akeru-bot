@@ -1,21 +1,11 @@
-import { useAtomValue } from "@effect/atom-react";
 import { Analytics01Icon, PlugSocketIcon, Settings02Icon } from "@hugeicons/core-free-icons";
-import type { EnvironmentId } from "@t3tools/contracts";
 import { Link } from "@tanstack/react-router";
-import type { ReactNode } from "react";
+import type { ComponentProps } from "react";
 import { memo, useCallback } from "react";
-import { loadCatalog } from "../../../../../plugins";
-
 import { useEnvironmentIdentificationMode } from "../../hooks/useSettings";
 import { openSettings } from "../../settingsDialogStore";
 import { openPlugins } from "../../pluginsDialogStore";
 import { openUsage } from "../../usageDialogStore";
-import { usePrimaryEnvironmentId } from "../../state/environments";
-import { environmentMcpServersAtom } from "../../state/mcpServers";
-import { AkeruMark } from "../AkeruMark";
-import { T3ConnectSidebarAvatar, T3ConnectSidebarSignIn } from "../clerk/T3ConnectSidebarSignIn";
-import { PluginLogoImage } from "../plugins/PluginsCatalog";
-import { findPluginServer, isBuiltinMcpServer } from "../plugins/pluginRegistry";
 import { cn } from "../../lib/utils";
 import {
   resolveEnvironmentIdentificationPillLabel,
@@ -96,113 +86,20 @@ function SidebarBrand({ onBackdrop }: { onBackdrop: boolean }) {
       )}
       to="/"
     >
-      <AkeruMark aria-hidden />
-      <span
-        className={cn(
-          "-translate-y-px truncate text-sm font-medium tracking-tight",
-          onBackdrop ? "text-white/70" : "text-muted-foreground",
-        )}
-      >
-        Akeru Bot
+      <span className="truncate text-xl leading-none tracking-tight [font-family:var(--font-brand-serif)]">
+        akeru
       </span>
     </Link>
   );
 }
 
-const PLUGIN_CATALOG = loadCatalog();
-
-export function formatEnabledPluginStatus(enabledCount: number): string {
-  if (enabledCount === 0) return "No plugins enabled";
-  return `${enabledCount} ${enabledCount === 1 ? "plugin" : "plugins"} enabled`;
-}
-
-function SidebarPluginSummaryForEnvironment({
-  environmentId,
-  onClick,
-}: {
-  readonly environmentId: EnvironmentId;
-  readonly onClick: () => void;
-}) {
-  const servers = useAtomValue(environmentMcpServersAtom(environmentId));
-  const enabledPlugins = PLUGIN_CATALOG.filter(
-    (plugin) => findPluginServer(plugin, servers)?.enabled,
-  );
-  const enabledCustomCount = servers.filter(
-    (server) => server.enabled && !isBuiltinMcpServer(server),
-  ).length;
-  const enabledCount = enabledPlugins.length + enabledCustomCount;
-  const statusLabel = formatEnabledPluginStatus(enabledCount);
-
-  return (
-    <SidebarMenuItem>
-      <Tooltip>
-        <TooltipTrigger
-          render={
-            <SidebarMenuButton
-              aria-label={`Plugins, ${statusLabel}`}
-              className="h-auto min-h-12 gap-2 rounded-xl px-2 py-2 group-data-[collapsible=icon]:size-8! group-data-[collapsible=icon]:min-h-8! group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:p-0!"
-              onClick={onClick}
-            >
-              <AppIcon className="size-[18px] shrink-0" icon={PlugSocketIcon} />
-              <span className="flex min-w-0 flex-1 flex-col items-start group-data-[collapsible=icon]:hidden">
-                <span className="text-sm font-medium leading-5">Plugins</span>
-                <span className="truncate text-xs leading-4 text-sidebar-muted-foreground">
-                  {statusLabel}
-                </span>
-              </span>
-              {enabledPlugins.length > 0 ? (
-                <span
-                  aria-hidden="true"
-                  className="flex shrink-0 -space-x-1.5 group-data-[collapsible=icon]:hidden"
-                >
-                  {enabledPlugins.slice(0, 3).map((plugin) => (
-                    <PluginLogoImage
-                      className="size-6 rounded-md"
-                      key={plugin.id}
-                      plugin={plugin}
-                    />
-                  ))}
-                </span>
-              ) : null}
-            </SidebarMenuButton>
-          }
-        />
-        <TooltipPopup side="right">{`Plugins · ${statusLabel}`}</TooltipPopup>
-      </Tooltip>
-    </SidebarMenuItem>
-  );
-}
-
-function SidebarPluginSummary({ onClick }: { readonly onClick: () => void }) {
-  const environmentId = usePrimaryEnvironmentId();
-  if (!environmentId) {
-    return (
-      <SidebarMenuItem>
-        <SidebarMenuButton
-          aria-label="Plugins, connect an environment to manage plugins"
-          className="h-auto min-h-12 gap-2 rounded-xl px-2 py-2"
-          onClick={onClick}
-        >
-          <AppIcon className="size-[18px] shrink-0" icon={PlugSocketIcon} />
-          <span className="flex min-w-0 flex-1 flex-col items-start group-data-[collapsible=icon]:hidden">
-            <span className="text-sm font-medium leading-5">Plugins</span>
-            <span className="truncate text-xs leading-4 text-sidebar-muted-foreground">
-              Connect an environment
-            </span>
-          </span>
-        </SidebarMenuButton>
-      </SidebarMenuItem>
-    );
-  }
-  return <SidebarPluginSummaryForEnvironment environmentId={environmentId} onClick={onClick} />;
-}
-
+/** One footer row: icon plus label, same shape for every entry. */
 function SidebarUtilityItem({
   icon,
   label,
   onClick,
 }: {
-  icon: ReactNode;
+  icon: ComponentProps<typeof AppIcon>["icon"];
   label: string;
   onClick: () => void;
 }) {
@@ -213,15 +110,17 @@ function SidebarUtilityItem({
           render={
             <SidebarMenuButton
               aria-label={label}
-              className="w-full justify-center gap-1.5 text-xs group-data-[collapsible=icon]:size-8! group-data-[collapsible=icon]:p-0!"
+              className="h-10 gap-2 rounded-xl px-2 group-data-[collapsible=icon]:size-8! group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:p-0!"
               onClick={onClick}
             >
-              {icon}
-              <span className="group-data-[collapsible=icon]:hidden">{label}</span>
+              <AppIcon className="size-[18px] shrink-0" icon={icon} />
+              <span className="truncate text-sm font-medium group-data-[collapsible=icon]:hidden">
+                {label}
+              </span>
             </SidebarMenuButton>
           }
         />
-        <TooltipPopup side="top">{label}</TooltipPopup>
+        <TooltipPopup side="right">{label}</TooltipPopup>
       </Tooltip>
     </SidebarMenuItem>
   );
@@ -246,29 +145,17 @@ export const SidebarChromeFooter = memo(function SidebarChromeFooter() {
   }, [closeMobileSidebar]);
 
   return (
-    <SidebarFooter className="max-h-[min(45dvh,22rem)] shrink-0 overflow-y-auto overscroll-contain p-[var(--sidebar-content-inset)]">
+    <SidebarFooter className="max-h-[min(45dvh,22rem)] shrink-0 gap-1 overflow-y-auto overscroll-contain p-[var(--sidebar-content-inset)]">
       <div className="flex flex-col gap-2 empty:hidden group-data-[collapsible=icon]:hidden">
         <SidebarProviderUpdatePill />
         <SidebarUpdateArchitectureWarning />
       </div>
       <SidebarMenu>
-        <SidebarPluginSummary onClick={handlePluginsClick} />
+        <SidebarUtilityItem icon={PlugSocketIcon} label="Plugins" onClick={handlePluginsClick} />
+        <SidebarUtilityItem icon={Analytics01Icon} label="Usage" onClick={handleUsageClick} />
       </SidebarMenu>
-      <div className="min-w-0 group-data-[collapsible=icon]:hidden">
-        <T3ConnectSidebarSignIn />
-        <T3ConnectSidebarAvatar />
-      </div>
       <SidebarMenu className="flex-row items-center gap-1 group-data-[collapsible=icon]:flex-col">
-        <SidebarUtilityItem
-          icon={<AppIcon className="size-4" icon={Settings02Icon} />}
-          label="Settings"
-          onClick={handleSettingsClick}
-        />
-        <SidebarUtilityItem
-          icon={<AppIcon className="size-4" icon={Analytics01Icon} />}
-          label="Usage"
-          onClick={handleUsageClick}
-        />
+        <SidebarUtilityItem icon={Settings02Icon} label="Settings" onClick={handleSettingsClick} />
         <SidebarUpdatePill />
       </SidebarMenu>
     </SidebarFooter>

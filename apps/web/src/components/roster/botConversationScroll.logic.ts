@@ -13,6 +13,7 @@ export interface ConversationFollowState {
 
 export type ConversationFollowEvent =
   | { readonly type: "user-navigation" }
+  | { readonly type: "message-submitted" }
   | { readonly type: "scroll-to-end" }
   | { readonly type: "scroll"; readonly isAtEnd: boolean };
 
@@ -22,6 +23,11 @@ export function reduceConversationFollowState(
 ): ConversationFollowState {
   if (event.type === "user-navigation") {
     return { followingEnd: false, programmaticScroll: false };
+  }
+  if (event.type === "message-submitted") {
+    return state.followingEnd
+      ? { followingEnd: true, programmaticScroll: true }
+      : { followingEnd: false, programmaticScroll: false };
   }
   if (event.type === "scroll-to-end") {
     return { followingEnd: true, programmaticScroll: true };

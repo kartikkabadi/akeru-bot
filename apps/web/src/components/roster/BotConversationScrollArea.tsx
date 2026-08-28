@@ -1,5 +1,5 @@
 import { ArrowDownIcon } from "lucide-react";
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 
 import { Button } from "../ui/button";
 import {
@@ -8,7 +8,13 @@ import {
   type ConversationFollowState,
 } from "./botConversationScroll.logic";
 
-export function BotConversationScrollArea({ children }: { readonly children: ReactNode }) {
+export function BotConversationScrollArea({
+  children,
+  followRevision,
+}: {
+  readonly children: ReactNode;
+  readonly followRevision?: string | null;
+}) {
   const viewportRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
   const followStateRef = useRef<ConversationFollowState>({
@@ -49,6 +55,17 @@ export function BotConversationScrollArea({ children }: { readonly children: Rea
       viewport.removeEventListener("scroll", updateScrollState);
     };
   }, []);
+
+  useLayoutEffect(() => {
+    if (followRevision == null) return;
+    const viewport = viewportRef.current;
+    if (!viewport) return;
+    const nextState = reduceConversationFollowState(followStateRef.current, {
+      type: "message-submitted",
+    });
+    followStateRef.current = nextState;
+    if (nextState.followingEnd) viewport.scrollTop = viewport.scrollHeight;
+  }, [followRevision]);
 
   const stopFollowingEnd = () => {
     followStateRef.current = reduceConversationFollowState(followStateRef.current, {

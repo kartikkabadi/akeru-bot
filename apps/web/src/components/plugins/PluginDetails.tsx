@@ -1,3 +1,4 @@
+import type { McpAuthConnectionStatus } from "@t3tools/contracts";
 import { ArrowUpRightIcon, CheckIcon, ChevronLeftIcon, LinkIcon } from "lucide-react";
 import type { PluginDefinition, PluginSkill } from "../../../../../plugins";
 import { Button } from "../ui/button";
@@ -14,22 +15,76 @@ function connectorAccess(plugin: PluginDefinition): string {
 interface PluginDetailsContentProps {
   readonly plugin: PluginDefinition;
   readonly installed: boolean;
+  readonly connection?: McpAuthConnectionStatus | undefined;
   readonly pending: boolean;
+  readonly pendingActionLabel?: string | null | undefined;
+  readonly activeLogin?: boolean | undefined;
   readonly onToggle: (enabled: boolean) => void;
+  readonly onConnect?: (() => void) | undefined;
+  readonly onCancelConnect?: (() => void) | undefined;
+  readonly onDisconnect?: (() => void) | undefined;
   readonly onCopySource: () => void;
   readonly onViewSource: () => void;
   readonly onOpenSkill: (skill: PluginSkill) => void;
 }
 
+function connectionStatusText(connection: McpAuthConnectionStatus | undefined): string {
+  switch (connection?.status) {
+    case "connected":
+      return `Connected · ${connection.toolCount} ${connection.toolCount === 1 ? "tool" : "tools"}`;
+    case "connecting":
+      return "Waiting for authorization…";
+    case "failed":
+      return connection.error;
+    default:
+      return "Not connected";
+  }
+}
+
 export function PluginDetailsContent({
   plugin,
   installed,
+  connection,
   pending,
+  pendingActionLabel = null,
+  activeLogin = false,
   onToggle,
+  onConnect,
+  onCancelConnect,
+  onDisconnect,
   onCopySource,
   onViewSource,
   onOpenSkill,
 }: PluginDetailsContentProps) {
+  const needsAuthentication =
+    installed &&
+    plugin.kind === "mcp-url" &&
+    plugin.authentication === "oauth" &&
+    connection?.status !== "connected";
+  const connecting = connection?.status === "connecting";
+  const buttonLabel = !installed
+    ? "Add"
+    : needsAuthentication
+      ? connecting
+        ? activeLogin
+          ? "Cancel"
+          : "Connect"
+        : connection?.status === "failed"
+          ? "Retry"
+          : "Connect"
+      : connection?.status === "connected"
+        ? "Connected"
+        : "Added";
+  const buttonAction = !installed
+    ? () => onToggle(true)
+    : needsAuthentication
+      ? connecting && activeLogin
+        ? onCancelConnect
+        : onConnect
+      : () => onToggle(false);
+  const visibleButtonLabel = pendingActionLabel ?? buttonLabel;
+  const accessibleButtonLabel =
+    installed && !needsAuthentication ? `Remove ${plugin.title}` : `${buttonLabel} ${plugin.title}`;
   return (
     <DialogPanel className="px-6 pt-6! pb-6 sm:px-8">
       <div className="mx-auto max-w-3xl space-y-6">
@@ -47,17 +102,35 @@ export function PluginDetailsContent({
                 {plugin.description}
               </p>
             </div>
-            <Button
-              aria-label={`${installed ? "Remove" : "Add"} ${plugin.title}`}
-              className="h-8 min-w-16 rounded-full px-3 text-xs"
-              size="sm"
-              variant={installed ? "secondary" : "default"}
-              disabled={pending}
-              onClick={() => onToggle(!installed)}
-            >
-              {installed ? <CheckIcon className="size-3.5" /> : null}
-              {installed ? "Added" : "Add"}
-            </Button>
+            <span aria-live="polite" className="sr-only" role="status">
+              {pendingActionLabel ? `${pendingActionLabel.replace("…", "")} ${plugin.title}` : ""}
+            </span>
+            {connection?.status === "connected" ? (
+              <span
+                aria-label={`${plugin.title} connected`}
+                className="inline-flex h-8 min-w-16 shrink-0 items-center justify-center gap-1.5 rounded-full bg-secondary px-3 text-xs text-secondary-foreground"
+              >
+                <CheckIcon className="size-3.5" />
+                Connected
+              </span>
+            ) : (
+              <span className={pending ? "inline-flex cursor-wait" : "inline-flex"}>
+                <Button
+                  aria-busy={pending}
+                  aria-label={accessibleButtonLabel}
+                  className="h-8 min-w-16 rounded-full px-3 text-xs disabled:opacity-100"
+                  size="sm"
+                  variant={installed ? "secondary" : "default"}
+                  disabled={pending}
+                  onClick={buttonAction}
+                >
+                  {!pendingActionLabel && installed && !needsAuthentication ? (
+                    <CheckIcon className="size-3.5" />
+                  ) : null}
+                  {visibleButtonLabel}
+                </Button>
+              </span>
+            )}
           </div>
           {plugin.docsUrl ? (
             <div className="mt-4 flex items-center gap-1 border-t pt-3">
@@ -85,14 +158,50 @@ export function PluginDetailsContent({
             </h3>
             <span className="text-[11px] text-muted-foreground">1 available</span>
           </div>
-          <div className="flex items-center justify-between gap-4 rounded-xl border bg-muted/35 px-4 py-3.5">
-            <div className="min-w-0">
-              <p className="truncate text-sm font-medium">{plugin.title}</p>
-              <p className="mt-0.5 text-xs text-muted-foreground">MCP connector</p>
+          <div className="rounded-xl border bg-muted/35 px-4 py-3.5">
+            <div className="flex items-center justify-between gap-4">
+              <div className="min-w-0">
+                <p className="truncate text-sm font-medium">{plugin.title}</p>
+                <p className="mt-0.5 text-xs text-muted-foreground">MCP connector</p>
+              </div>
+              <span className="shrink-0 rounded-full bg-muted px-2.5 py-1 text-xs text-muted-foreground">
+                {connectorAccess(plugin)}
+              </span>
             </div>
-            <span className="shrink-0 rounded-full bg-muted px-2.5 py-1 text-xs text-muted-foreground">
-              {connectorAccess(plugin)}
-            </span>
+            {installed && plugin.kind === "mcp-url" && plugin.authentication === "oauth" ? (
+              <div className="mt-3 flex items-center justify-between gap-3 border-t pt-3">
+                <p
+                  className={
+                    connection?.status === "failed"
+                      ? "min-w-0 text-xs text-destructive-foreground"
+                      : "min-w-0 text-xs text-muted-foreground"
+                  }
+                >
+                  {connectionStatusText(connection)}
+                </p>
+                {connection?.status === "connected" ? (
+                  <Button
+                    aria-label={`Disconnect ${plugin.title}`}
+                    size="sm"
+                    variant="ghost-muted"
+                    disabled={pending}
+                    onClick={onDisconnect}
+                  >
+                    Disconnect
+                  </Button>
+                ) : (
+                  <Button
+                    aria-label={`Remove ${plugin.title}`}
+                    size="sm"
+                    variant="ghost-muted"
+                    disabled={pending}
+                    onClick={() => onToggle(false)}
+                  >
+                    Remove
+                  </Button>
+                )}
+              </div>
+            ) : null}
           </div>
         </section>
 
@@ -132,9 +241,15 @@ export function PluginDetailsContent({
 export function PluginDetails({
   plugin,
   installed,
+  connection,
   pending,
+  pendingActionLabel,
+  activeLogin,
   onBack,
   onToggle,
+  onConnect,
+  onCancelConnect,
+  onDisconnect,
   onCopySource,
   onViewSource,
   onOpenSkill,
@@ -152,8 +267,14 @@ export function PluginDetails({
       <PluginDetailsContent
         plugin={plugin}
         installed={installed}
+        connection={connection}
         pending={pending}
+        pendingActionLabel={pendingActionLabel}
+        activeLogin={activeLogin}
         onToggle={onToggle}
+        onConnect={onConnect}
+        onCancelConnect={onCancelConnect}
+        onDisconnect={onDisconnect}
         onCopySource={onCopySource}
         onViewSource={onViewSource}
         onOpenSkill={onOpenSkill}

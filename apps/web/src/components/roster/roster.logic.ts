@@ -1,4 +1,4 @@
-import type { OrchestrationThreadShell } from "@t3tools/contracts";
+import type { ContextMenuItem, OrchestrationThreadShell } from "@t3tools/contracts";
 import type { TimestampFormat } from "@t3tools/contracts/settings";
 import { formatShortTimestamp, parseTimestampDate } from "../../timestampFormat";
 import type { Bot, BotAvatar, BotBlobShape, Group } from "./types";
@@ -87,14 +87,18 @@ type PresenceShell = Pick<
 /**
  * Presence for the thread a bot's chat points at. Pending approvals or user
  * input outrank a running turn: the bot is waiting on you, not working. The
- * running test mirrors the legacy sidebar's working indicator; background
+ * session test mirrors the legacy sidebar's working indicator: a starting
+ * session already counts, so the working shimmer covers provider startup
+ * instead of appearing only once the turn reports running. Background
  * liveness keeps the bot working while subagents or workflows run on after
  * the turn settles.
  */
 export function resolveBotPresence(shell: PresenceShell | null): RosterPresence {
   if (shell === null) return "idle";
   if (shell.hasPendingApprovals || shell.hasPendingUserInput) return "needs-you";
-  if (shell.session?.status === "running" && shell.session.activeTurnId != null) return "working";
+  if (shell.session?.status === "running" || shell.session?.status === "starting") {
+    return "working";
+  }
   if (shell.backgroundLiveness === "working") return "working";
   return "idle";
 }
@@ -237,16 +241,124 @@ export interface RosterGroupSection {
   readonly bots: ReadonlyArray<Bot>;
 }
 
+export type BotRosterMenuAction =
+  | "pin"
+  | "unpin"
+  | "move"
+  | "edit-profile"
+  | "duplicate"
+  | "mark-unread"
+  | "copy-conversation-id"
+  | "copy-bot-id"
+  | "archive"
+  | "delete"
+  | "move:unassigned"
+  | `move:${string}`;
+
+export type GroupRosterMenuAction = "rename" | "move-up" | "move-down" | "delete";
+
+export function buildBotRosterMenuItems(
+  bot: Pick<Bot, "id" | "groupId" | "pinned">,
+  groups: ReadonlyArray<Pick<Group, "id" | "name" | "bossBotId">>,
+  hasConversation = false,
+): ReadonlyArray<ContextMenuItem<BotRosterMenuAction>> {
+  const isBoss = groups.some((group) => group.bossBotId === bot.id);
+  return [
+    {
+      id: bot.pinned ? "unpin" : "pin",
+      label: bot.pinned ? "Unpin" : "Pin",
+      icon: bot.pinned ? "pin-off" : "pin",
+    },
+    {
+      id: "move",
+      label: "Move to",
+      icon: "folder",
+      disabled: isBoss,
+      children: [
+        {
+          id: "move:unassigned",
+          label: "Unassigned",
+          disabled: bot.groupId === null,
+        },
+        ...groups.map((group) => ({
+          id: `move:${group.id}` as const,
+          label: group.name,
+          disabled: bot.groupId === group.id,
+        })),
+      ],
+    },
+    {
+      id: "mark-unread",
+      label: "Mark as unread",
+      icon: "mail-open",
+      disabled: !hasConversation,
+    },
+    {
+      id: "edit-profile",
+      label: "Edit profile",
+      icon: "pencil",
+      separatorBefore: true,
+    },
+    { id: "duplicate", label: "Duplicate", icon: "copy" },
+    {
+      id: "copy-conversation-id",
+      label: "Copy conversation ID",
+      icon: "copy",
+      disabled: !hasConversation,
+      separatorBefore: true,
+    },
+    { id: "copy-bot-id", label: "Copy bot ID", icon: "hash" },
+    {
+      id: "archive",
+      label: "Archive",
+      icon: "archive",
+      disabled: isBoss,
+      separatorBefore: true,
+    },
+    {
+      id: "delete",
+      label: "Delete",
+      icon: "trash",
+      destructive: true,
+      disabled: isBoss,
+    },
+  ];
+}
+
+export function buildGroupRosterMenuItems(
+  groupIndex: number,
+  groupCount: number,
+): ReadonlyArray<ContextMenuItem<GroupRosterMenuAction>> {
+  return [
+    { id: "rename", label: "Rename", icon: "pencil" },
+    { id: "move-up", label: "Move up", icon: "arrow-up", disabled: groupIndex <= 0 },
+    {
+      id: "move-down",
+      label: "Move down",
+      icon: "arrow-down",
+      disabled: groupIndex < 0 || groupIndex >= groupCount - 1,
+    },
+    {
+      id: "delete",
+      label: "Delete",
+      icon: "trash",
+      destructive: true,
+      separatorBefore: true,
+    },
+  ];
+}
+
 /** Assigned groups first, then every bot without a group under Unassigned. */
 export function buildGroupedRosterSections(
   bots: ReadonlyArray<Bot>,
   groups: ReadonlyArray<Group>,
 ): ReadonlyArray<RosterGroupSection> {
   const active = bots.filter((bot) => bot.archivedAt === null && bot.pinned === false);
-  const assigned = groups.flatMap((group) => {
-    const groupBots = active.filter((bot) => bot.groupId === group.id);
-    return groupBots.length > 0 ? [{ id: group.id, name: group.name, bots: groupBots }] : [];
-  });
+  const assigned = groups.map((group) => ({
+    id: group.id,
+    name: group.name,
+    bots: active.filter((bot) => bot.groupId === group.id),
+  }));
   const unassigned = active.filter((bot) => bot.groupId === null);
   return [
     ...assigned,
@@ -254,7 +366,9 @@ export function buildGroupedRosterSections(
   ];
 }
 
-const weekdayFormatter = new Intl.DateTimeFormat(undefined, { weekday: "short" });
+const weekdayFormatter = new Intl.DateTimeFormat(undefined, {
+  weekday: "short",
+});
 const numericDateFormatter = new Intl.DateTimeFormat(undefined, {
   month: "numeric",
   day: "numeric",
@@ -317,7 +431,11 @@ export function parseChatPath(pathname: string): RosterChatTarget | null {
   const segments = pathname.split("/").filter((segment) => segment.length > 0);
   if (segments.length !== 2) return null;
   if (NON_CHAT_ROUTE_PREFIXES.has(segments[0]!)) return null;
-  return { kind: "thread", environmentId: segments[0]!, threadId: segments[1]! };
+  return {
+    kind: "thread",
+    environmentId: segments[0]!,
+    threadId: segments[1]!,
+  };
 }
 
 /** True when a pathname is a chat route worth remembering for a bot. */

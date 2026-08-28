@@ -6,35 +6,18 @@ import {
   Settings02Icon,
 } from "@hugeicons/core-free-icons";
 import type { IconSvgElement } from "@hugeicons/react";
-import { Suspense, lazy, type ComponentType } from "react";
+import type { ComponentType } from "react";
 
 import { cn } from "~/lib/utils";
 import { Dialog, DialogPopup, DialogTitle } from "~/components/ui/dialog";
 import { AppIcon } from "~/components/ui/app-icon";
-import { Spinner } from "~/components/ui/spinner";
 import { closeSettings, useSettingsDialogStore, type SettingsSection } from "~/settingsDialogStore";
-
-const GeneralSettingsPanel = lazy(async () => ({
-  default: (await import("./SettingsPanels")).GeneralSettingsPanel,
-}));
-const AppearanceSettingsPanel = lazy(async () => ({
-  default: (await import("./SettingsPanels")).AppearanceSettingsPanel,
-}));
-const ProvidersPanel = lazy(async () => ({
-  default: (await import("./ProvidersPanel")).ProvidersPanel,
-}));
-const ConnectionsSettings = lazy(async () => ({
-  default: (await import("./ConnectionsSettings")).ConnectionsSettings,
-}));
-const KeybindingsSettingsPanel = lazy(async () => ({
-  default: (await import("./KeybindingsSettings")).KeybindingsSettingsPanel,
-}));
-const SourceControlSettingsPanel = lazy(async () => ({
-  default: (await import("./SourceControlSettings")).SourceControlSettingsPanel,
-}));
-const DiagnosticsSettingsPanel = lazy(async () => ({
-  default: (await import("./DiagnosticsSettings")).DiagnosticsSettingsPanel,
-}));
+import { AppearanceSettingsPanel, GeneralSettingsPanel } from "./SettingsPanels";
+import { ProvidersPanel } from "./ProvidersPanel";
+import { ConnectionsSettings } from "./ConnectionsSettings";
+import { KeybindingsSettingsPanel } from "./KeybindingsSettings";
+import { SourceControlSettingsPanel } from "./SourceControlSettings";
+import { DiagnosticsSettingsPanel } from "./DiagnosticsSettings";
 
 const SECTION_PANELS: Readonly<Record<SettingsSection, ComponentType>> = {
   general: GeneralSettingsPanel,
@@ -102,17 +85,7 @@ export function SettingsDialog() {
           })}
         </nav>
 
-        <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-          <Suspense
-            fallback={
-              <div className="flex flex-1 items-center justify-center">
-                <Spinner />
-              </div>
-            }
-          >
-            {Panel ? <Panel /> : null}
-          </Suspense>
-        </div>
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col">{Panel ? <Panel /> : null}</div>
       </DialogPopup>
     </Dialog>
   );

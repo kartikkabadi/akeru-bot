@@ -20,8 +20,7 @@ import { environmentGroupsAtom } from "../../state/bots";
 import {
   useAllEnvironmentShellsBootstrapped,
   useProjects,
-  useThreadMessages,
-  useThreadShell,
+  useThreadMessagesForRefs,
   useThreadShells,
 } from "../../state/entities";
 import { usePrimaryEnvironmentId } from "../../state/environments";
@@ -30,7 +29,13 @@ import { threadEnvironment } from "../../state/threads";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { DEFAULT_INTERACTION_MODE } from "../../types";
 import { sortScopedProjectsForSidebar } from "../Sidebar.logic";
-import { buildGroupTurnStartInput, findLatestGroupThreadTarget } from "./botThreadRuntime.logic";
+import { botAwaitsReply } from "./botConversationPresentation";
+import {
+  buildGroupTurnStartInput,
+  findLatestGroupMemberThreadTarget,
+} from "./botThreadRuntime.logic";
+import { buildGroupContextNote, hasEveryoneMention, mergeGroupMemberMessages } from "./groupFanout";
+import { resolveBotPresence } from "./roster.logic";
 import { useRosterStore } from "./rosterStore";
 
 const NO_ENVIRONMENT = "" as EnvironmentId;
@@ -84,30 +89,105 @@ export function useGroupThreadRuntime(groupId: string) {
         : [],
     [primaryEnvironmentId, threadShells],
   );
-  const serverTarget = primaryEnvironmentId
-    ? findLatestGroupThreadTarget(groupId, primaryEnvironmentId, primaryThreadShells)
-    : null;
-  const rememberedThreadRef = useMemo<ScopedThreadRef | null>(
-    () =>
-      serverTarget
-        ? scopeThreadRef(
-            EnvironmentId.make(serverTarget.environmentId),
-            ThreadId.make(serverTarget.threadId),
-          )
-        : null,
-    [serverTarget],
+  const members = useMemo(
+    () => bots.filter((bot) => bot.groupId === groupId && bot.archivedAt === null),
+    [bots, groupId],
   );
-  const rememberedThread = useThreadShell(rememberedThreadRef);
-  const linkedThreadRef = rememberedThread ? rememberedThreadRef : null;
-  const retainedThreadRef = useRef<{ groupId: string; threadRef: ScopedThreadRef | null }>({
+  // Each member owns one thread inside the group so members work concurrently.
+  const retainedMemberRefs = useRef<{ groupId: string; refs: Map<string, ScopedThreadRef> }>({
     groupId,
-    threadRef: null,
+    refs: new Map(),
   });
-  if (retainedThreadRef.current.groupId !== groupId) {
-    retainedThreadRef.current = { groupId, threadRef: null };
+  if (retainedMemberRefs.current.groupId !== groupId) {
+    retainedMemberRefs.current = { groupId, refs: new Map() };
   }
-  if (linkedThreadRef) retainedThreadRef.current.threadRef = linkedThreadRef;
-  const messages = useThreadMessages(linkedThreadRef);
+  const memberRefEntries = useMemo(
+    () =>
+      members.map((member) => {
+        const target = primaryEnvironmentId
+          ? findLatestGroupMemberThreadTarget(
+              groupId,
+              member.id,
+              primaryEnvironmentId,
+              primaryThreadShells,
+              { adoptUnrouted: member.id === group?.bossBotId },
+            )
+          : null;
+        return {
+          botId: member.id,
+          threadRef: target
+            ? scopeThreadRef(
+                EnvironmentId.make(target.environmentId),
+                ThreadId.make(target.threadId),
+              )
+            : (retainedMemberRefs.current.refs.get(member.id) ?? null),
+        };
+      }),
+    [group?.bossBotId, groupId, members, primaryEnvironmentId, primaryThreadShells],
+  );
+  for (const entry of memberRefEntries) {
+    if (entry.threadRef) retainedMemberRefs.current.refs.set(entry.botId, entry.threadRef);
+  }
+  const linkedRefs = useMemo(
+    () => memberRefEntries.flatMap((entry) => (entry.threadRef === null ? [] : [entry.threadRef])),
+    [memberRefEntries],
+  );
+  const memberMessageLists = useThreadMessagesForRefs(linkedRefs);
+  const shellByThreadId = useMemo(
+    () => new Map(primaryThreadShells.map((shell) => [shell.id, shell])),
+    [primaryThreadShells],
+  );
+  // Choice prompts surface from whichever member thread is waiting on the user.
+  const pendingInputRef = useMemo(
+    () =>
+      linkedRefs.find((ref) => shellByThreadId.get(ref.threadId)?.hasPendingUserInput === true) ??
+      null,
+    [linkedRefs, shellByThreadId],
+  );
+  const [pendingBotIds, setPendingBotIds] = useState<ReadonlyArray<string>>([]);
+  const workingBotIds = useMemo(() => {
+    const working = new Set<string>();
+    let listIndex = 0;
+    for (const entry of memberRefEntries) {
+      const shell = entry.threadRef ? shellByThreadId.get(entry.threadRef.threadId) : null;
+      const list = entry.threadRef === null ? [] : (memberMessageLists[listIndex++] ?? []);
+      if (!shell) continue;
+      const presence = resolveBotPresence(shell);
+      // An unanswered user message keeps the member working even while its
+      // provider session churns through stop/restart states mid-turn.
+      const turnFailed =
+        shell.session?.status === "error" ||
+        shell.latestTurn?.state === "error" ||
+        shell.latestTurn?.state === "interrupted";
+      // A member with a rendered choice card is waiting, not working; a stale
+      // pending-input flag from a dead turn must not hide the working state.
+      if (
+        presence === "working" ||
+        (!shell.hasPendingApprovals && botAwaitsReply(list, { turnFailed }))
+      ) {
+        working.add(entry.botId);
+      }
+    }
+    for (const botId of pendingBotIds) working.add(botId);
+    return [...working];
+  }, [memberMessageLists, memberRefEntries, pendingBotIds, shellByThreadId]);
+  const messages = useMemo(() => {
+    let listIndex = 0;
+    return mergeGroupMemberMessages(
+      memberRefEntries.flatMap((entry) => {
+        if (entry.threadRef === null) return [];
+        const list = memberMessageLists[listIndex] ?? [];
+        listIndex += 1;
+        return [
+          {
+            botId: entry.botId,
+            working: workingBotIds.includes(entry.botId),
+            messages: list,
+          },
+        ];
+      }),
+    );
+  }, [memberMessageLists, memberRefEntries, workingBotIds]);
   const defaultProject = useMemo(
     () =>
       bootstrapped && primaryEnvironmentId
@@ -119,11 +199,14 @@ export function useGroupThreadRuntime(groupId: string) {
         : null,
     [bootstrapped, primaryEnvironmentId, primaryThreadShells, projects],
   );
+  const activeThread = memberRefEntries
+    .map((entry) => (entry.threadRef ? shellByThreadId.get(entry.threadRef.threadId) : undefined))
+    .find((thread) => thread !== undefined);
   const activeProject =
     projects.find(
       (project) =>
-        project.environmentId === rememberedThread?.environmentId &&
-        project.id === rememberedThread.projectId,
+        project.environmentId === activeThread?.environmentId &&
+        project.id === activeThread.projectId,
     ) ?? defaultProject;
   const appDefaultModelSelection = useMemo(
     () => resolveAppModelSelectionState(settings, providers),
@@ -152,27 +235,23 @@ export function useGroupThreadRuntime(groupId: string) {
         return false;
       }
 
-      const respondingBotId = requestedBotId ?? group.bossBotId;
-      const respondingBot = bots.find(
-        (bot) => bot.id === respondingBotId && bot.groupId === groupId,
+      const everyone = requestedBotId === undefined && hasEveryoneMention(prompt);
+      const targets = members.filter((bot) =>
+        requestedBotId !== undefined
+          ? bot.id === requestedBotId
+          : everyone || bot.id === group.bossBotId,
       );
-      if (!respondingBot) {
+      if (targets.length === 0) {
         setError("Choose a current group member.");
         return false;
       }
-      const modelSelection: ModelSelection = respondingBot.engine
-        ? {
-            instanceId: ProviderInstanceId.make(respondingBot.engine.provider),
-            model: respondingBot.engine.model,
-          }
-        : (activeProject.defaultModelSelection ?? appDefaultModelSelection);
+      const memberNames = members.map((bot) => bot.name);
 
       sendInFlightRef.current = true;
       setSending(true);
+      setPendingBotIds(targets.map((bot) => bot.id));
       setError(null);
       const createdAt = new Date().toISOString();
-      const currentThreadRef = retainedThreadRef.current.threadRef;
-      const threadId = currentThreadRef?.threadId ?? newThreadId();
 
       try {
         const attachments = await Promise.all(
@@ -184,33 +263,55 @@ export function useGroupThreadRuntime(groupId: string) {
             dataUrl: await readFileAsDataUrl(file),
           })),
         );
-        const environmentId = currentThreadRef?.environmentId ?? activeProject.environmentId;
-        const result = await startTurn({
-          environmentId,
-          input: buildGroupTurnStartInput({
-            groupId: GroupId.make(groupId),
-            respondingBotId: BotId.make(respondingBot.id),
-            threadId,
-            projectId: activeProject.id,
-            title: threadTitle(prompt, files),
-            message: {
-              messageId: newMessageId(),
-              role: "user",
-              text: prompt,
-              attachments,
-            },
-            modelSelection,
-            runtimeMode: respondingBot.runtimeMode ?? DEFAULT_RUNTIME_MODE,
-            interactionMode: DEFAULT_INTERACTION_MODE,
-            createdAt,
-            createThread: currentThreadRef === null,
+        const outcomes = await Promise.all(
+          targets.map(async (member) => {
+            const currentRef = retainedMemberRefs.current.refs.get(member.id) ?? null;
+            const threadId = currentRef?.threadId ?? newThreadId();
+            const environmentId = currentRef?.environmentId ?? activeProject.environmentId;
+            const modelSelection: ModelSelection = member.engine
+              ? {
+                  instanceId: ProviderInstanceId.make(member.engine.provider),
+                  model: member.engine.model,
+                }
+              : (activeProject.defaultModelSelection ?? appDefaultModelSelection);
+            const result = await startTurn({
+              environmentId,
+              input: buildGroupTurnStartInput({
+                groupId: GroupId.make(groupId),
+                respondingBotId: BotId.make(member.id),
+                threadId,
+                projectId: activeProject.id,
+                title: threadTitle(prompt, files),
+                message: {
+                  messageId: newMessageId(),
+                  role: "user",
+                  // Context note tells the member who it is and when to stay
+                  // silent; the group view strips it before display.
+                  text: `${prompt}${buildGroupContextNote({
+                    memberName: member.name,
+                    groupName: group.name,
+                    memberNames,
+                    everyone,
+                  })}`,
+                  attachments,
+                },
+                modelSelection,
+                runtimeMode: member.runtimeMode ?? DEFAULT_RUNTIME_MODE,
+                interactionMode: DEFAULT_INTERACTION_MODE,
+                createdAt,
+                createThread: currentRef === null,
+              }),
+            });
+            if (result._tag === "Failure") return errorMessage(result);
+            retainedMemberRefs.current.refs.set(member.id, scopeThreadRef(environmentId, threadId));
+            return null;
           }),
-        });
-        if (result._tag === "Failure") {
-          setError(errorMessage(result));
-          return false;
+        );
+        const failure = outcomes.find((outcome) => outcome !== null);
+        if (failure !== undefined && failure !== null) {
+          setError(failure);
+          return outcomes.some((outcome) => outcome === null);
         }
-        retainedThreadRef.current.threadRef = scopeThreadRef(environmentId, threadId);
         return true;
       } catch (cause) {
         setError(cause instanceof Error ? cause.message : "Could not send the message.");
@@ -218,9 +319,10 @@ export function useGroupThreadRuntime(groupId: string) {
       } finally {
         sendInFlightRef.current = false;
         setSending(false);
+        setPendingBotIds([]);
       }
     },
-    [activeProject, appDefaultModelSelection, bots, group, groupId, groupReady, startTurn],
+    [activeProject, appDefaultModelSelection, group, groupId, groupReady, members, startTurn],
   );
 
   return {
@@ -228,10 +330,10 @@ export function useGroupThreadRuntime(groupId: string) {
     defaultProject: activeProject,
     error,
     groupReady,
-    linkedThreadRef,
     messages,
-    respondingBotId: rememberedThread?.respondingBotId ?? group?.bossBotId ?? null,
+    pendingInputRef,
     send,
     sending,
+    workingBotIds,
   };
 }

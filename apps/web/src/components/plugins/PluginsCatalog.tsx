@@ -1,13 +1,14 @@
-import type { McpServer } from "@t3tools/contracts";
-import { CheckIcon, ChevronRightIcon, PencilIcon, Trash2Icon } from "lucide-react";
+import type { McpAuthConnectionStatus, McpServer } from "@t3tools/contracts";
+import { CheckIcon, PencilIcon, Trash2Icon } from "lucide-react";
 import type { PluginDefinition } from "../../../../../plugins";
+import { cn } from "../../lib/utils";
 import { Button } from "../ui/button";
 import { findPluginServer, pluginMcpServerId } from "./pluginRegistry";
 import type { PluginFilter, PluginSection } from "./pluginPresentation";
 
 export function PluginLogoImage({
   plugin,
-  className = "size-10",
+  className,
 }: {
   readonly plugin: PluginDefinition;
   readonly className?: string;
@@ -15,7 +16,10 @@ export function PluginLogoImage({
   return (
     <span
       aria-hidden="true"
-      className={`${className} flex shrink-0 items-center justify-center overflow-hidden rounded-lg bg-muted p-2`}
+      className={cn(
+        "flex size-10 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-muted p-2",
+        className,
+      )}
     >
       <img
         alt=""
@@ -37,27 +41,114 @@ interface PluginsCatalogProps {
   readonly sections: readonly PluginSection[];
   readonly servers: readonly McpServer[];
   readonly pendingServerId: string | null;
+  readonly pendingActionLabel: string | null;
+  readonly activeLoginServerId: string | null;
+  readonly connectionByServerId: ReadonlyMap<string, McpAuthConnectionStatus>;
   readonly onToggle: (plugin: PluginDefinition, enabled: boolean) => void;
+  readonly onConnect: (plugin: PluginDefinition) => void;
+  readonly onCancelConnect: (plugin: PluginDefinition) => void;
   readonly onOpen: (plugin: PluginDefinition) => void;
   readonly onViewAll: (filter: PluginFilter) => void;
 }
 
-function PluginRow({
-  plugin,
-  server,
-  pending,
-  onToggle,
-  onOpen,
-  showCategory,
-}: {
+interface PluginActionProps {
   readonly plugin: PluginDefinition;
   readonly server: McpServer | undefined;
-  readonly pending: boolean;
+  readonly connection: McpAuthConnectionStatus | undefined;
+  readonly pendingActionLabel: string | null;
+  readonly activeLogin: boolean;
   readonly onToggle: (enabled: boolean) => void;
+  readonly onConnect: () => void;
+  readonly onCancelConnect: () => void;
   readonly onOpen: () => void;
-  readonly showCategory: boolean;
-}) {
+}
+
+/**
+ * One Add / Connect / Added pill shared by the row and card layouts. A
+ * connecting plugin stays actionable: the client that started the login can
+ * cancel it, and any other client can restart the flow instead of waiting
+ * for the ten-minute server timeout.
+ */
+function PluginActionButton({
+  plugin,
+  server,
+  connection,
+  pendingActionLabel,
+  activeLogin,
+  onToggle,
+  onConnect,
+  onCancelConnect,
+  onOpen,
+  className,
+}: PluginActionProps & { readonly className?: string }) {
   const installed = server?.enabled ?? false;
+  const needsAuthentication =
+    installed &&
+    plugin.kind === "mcp-url" &&
+    plugin.authentication === "oauth" &&
+    connection?.status !== "connected";
+  const connecting = connection?.status === "connecting";
+  const buttonLabel = !installed
+    ? "Add"
+    : needsAuthentication
+      ? connecting
+        ? activeLogin
+          ? "Cancel"
+          : "Connect"
+        : connection?.status === "failed"
+          ? "Retry"
+          : "Connect"
+      : connection?.status === "connected"
+        ? "Connected"
+        : "Added";
+  const onClick = !installed
+    ? () => onToggle(true)
+    : needsAuthentication
+      ? connecting && activeLogin
+        ? onCancelConnect
+        : onConnect
+      : connection?.status === "connected"
+        ? onOpen
+        : () => onToggle(false);
+  const visibleLabel = pendingActionLabel ?? buttonLabel;
+  const accessibleLabel =
+    connection?.status === "connected"
+      ? `Open ${plugin.title} details`
+      : installed && !needsAuthentication
+        ? `Remove ${plugin.title}`
+        : `${buttonLabel} ${plugin.title}`;
+  return (
+    <span
+      className={cn(
+        "inline-flex shrink-0",
+        pendingActionLabel !== null && "cursor-wait",
+        className,
+      )}
+    >
+      <Button
+        aria-busy={pendingActionLabel !== null}
+        aria-label={accessibleLabel}
+        className="h-7 min-w-14 rounded-full px-3 text-xs disabled:opacity-100"
+        size="sm"
+        variant="secondary"
+        disabled={pendingActionLabel !== null}
+        onClick={onClick}
+      >
+        {!pendingActionLabel && installed && !needsAuthentication ? (
+          <CheckIcon className="size-3.5" />
+        ) : null}
+        {visibleLabel}
+      </Button>
+    </span>
+  );
+}
+
+function PluginRow({
+  plugin,
+  onOpen,
+  showCategory,
+  ...action
+}: PluginActionProps & { readonly showCategory: boolean }) {
   return (
     <article
       className="group flex min-w-0 items-center rounded-xl pe-2.5 transition-colors hover:bg-muted/45"
@@ -71,7 +162,7 @@ function PluginRow({
       >
         <PluginLogoImage plugin={plugin} />
         <div className="min-w-0 flex-1">
-          <div className="flex min-w-0 items-center gap-2">
+          <div className="flex min-w-0 items-baseline gap-2">
             <h3 className="truncate text-sm font-medium leading-5">{plugin.title}</h3>
             {showCategory ? (
               <span className="shrink-0 text-[11px] text-muted-foreground">{plugin.category}</span>
@@ -79,22 +170,35 @@ function PluginRow({
           </div>
           <p className="truncate text-xs leading-5 text-muted-foreground">{plugin.description}</p>
         </div>
-        <ChevronRightIcon
-          aria-hidden="true"
-          className="size-4 shrink-0 text-muted-foreground/60 transition-transform group-hover:translate-x-0.5 group-hover:text-foreground"
-        />
       </button>
-      <Button
-        aria-label={`${installed ? "Remove" : "Add"} ${plugin.title}`}
-        className="h-7 min-w-14 rounded-full px-3 text-xs"
-        size="sm"
-        variant="secondary"
-        disabled={pending}
-        onClick={() => onToggle(!installed)}
-      >
-        {installed ? <CheckIcon className="size-3.5" /> : null}
-        {installed ? "Added" : "Add"}
-      </Button>
+      <PluginActionButton plugin={plugin} onOpen={onOpen} {...action} />
+    </article>
+  );
+}
+
+/** Featured layout: a bordered card with room for two description lines. */
+function PluginCard({ plugin, onOpen, ...action }: PluginActionProps) {
+  return (
+    <article
+      className="relative flex min-w-0 flex-col gap-3 rounded-2xl border border-border/60 bg-card/40 p-4 transition-colors hover:bg-muted/40"
+      data-plugin-id={plugin.id}
+    >
+      <button
+        aria-label={`Open ${plugin.title}`}
+        className="absolute inset-0 cursor-pointer rounded-2xl outline-hidden focus-visible:ring-2 focus-visible:ring-ring"
+        type="button"
+        onClick={onOpen}
+      />
+      <div className="flex items-start justify-between gap-3">
+        <PluginLogoImage className="size-11 rounded-xl" plugin={plugin} />
+        <PluginActionButton className="relative" plugin={plugin} onOpen={onOpen} {...action} />
+      </div>
+      <div className="min-w-0">
+        <h3 className="truncate text-sm font-semibold leading-5">{plugin.title}</h3>
+        <p className="mt-1 line-clamp-2 text-xs leading-5 text-muted-foreground">
+          {plugin.description}
+        </p>
+      </div>
     </article>
   );
 }
@@ -103,7 +207,12 @@ export function PluginsCatalog({
   sections,
   servers,
   pendingServerId,
+  pendingActionLabel,
+  activeLoginServerId,
+  connectionByServerId,
   onToggle,
+  onConnect,
+  onCancelConnect,
   onOpen,
   onViewAll,
 }: PluginsCatalogProps) {
@@ -111,12 +220,24 @@ export function PluginsCatalog({
   if (resultCount === 0) {
     return <p className="py-14 text-center text-sm text-muted-foreground">No plugins match.</p>;
   }
+  const pendingPlugin = pendingServerId
+    ? sections
+        .flatMap((section) => section.plugins)
+        .find((plugin) => pluginMcpServerId(plugin) === pendingServerId)
+    : undefined;
+  const pendingStatus =
+    pendingActionLabel && pendingPlugin
+      ? `${pendingActionLabel.replace("…", "")} ${pendingPlugin.title}`
+      : "";
   return (
-    <div className="space-y-7">
+    <div className="w-full min-w-0 space-y-7">
+      <span aria-live="polite" className="sr-only" role="status">
+        {pendingStatus}
+      </span>
       {sections.map((section) => (
-        <section aria-label={section.title} key={section.title}>
-          <div className="mb-2 flex items-center justify-between px-2">
-            <h2 className="text-xs font-medium text-muted-foreground">{section.title}</h2>
+        <section aria-label={section.title} className="min-w-0" key={section.title}>
+          <div className="mb-2.5 flex items-baseline justify-between px-2">
+            <h2 className="text-sm font-semibold leading-5">{section.title}</h2>
             {section.showViewAll ? (
               <button
                 className="cursor-pointer rounded text-xs text-muted-foreground outline-hidden hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
@@ -127,18 +248,32 @@ export function PluginsCatalog({
               </button>
             ) : null}
           </div>
-          <div className="grid grid-cols-1 gap-x-7 md:grid-cols-2">
+          <div
+            className={cn(
+              "grid min-w-0 grid-cols-1",
+              section.layout === "cards" ? "gap-3 sm:grid-cols-2" : "gap-x-7 md:grid-cols-2",
+            )}
+          >
             {section.plugins.map((plugin) => {
-              const server = findPluginServer(plugin, servers);
-              return (
+              const shared = {
+                plugin,
+                server: findPluginServer(plugin, servers),
+                connection: connectionByServerId.get(String(pluginMcpServerId(plugin))),
+                pendingActionLabel:
+                  pendingServerId === pluginMcpServerId(plugin) ? pendingActionLabel : null,
+                activeLogin: activeLoginServerId === String(pluginMcpServerId(plugin)),
+                onToggle: (enabled: boolean) => onToggle(plugin, enabled),
+                onConnect: () => onConnect(plugin),
+                onCancelConnect: () => onCancelConnect(plugin),
+                onOpen: () => onOpen(plugin),
+              };
+              return section.layout === "cards" ? (
+                <PluginCard key={`${section.title}:${plugin.id}`} {...shared} />
+              ) : (
                 <PluginRow
                   key={`${section.title}:${plugin.id}`}
-                  plugin={plugin}
-                  server={server}
-                  pending={pendingServerId === pluginMcpServerId(plugin)}
-                  onToggle={(enabled) => onToggle(plugin, enabled)}
-                  onOpen={() => onOpen(plugin)}
                   showCategory={section.title === "Search results"}
+                  {...shared}
                 />
               );
             })}
@@ -174,7 +309,7 @@ export function CustomMcpServers({
   return (
     <section aria-labelledby="custom-mcp-title">
       <div className="mb-2 flex items-center justify-between px-2">
-        <h2 className="text-xs font-medium text-muted-foreground" id="custom-mcp-title">
+        <h2 className="text-sm font-semibold leading-5" id="custom-mcp-title">
           Custom MCP servers
         </h2>
         <span className="text-xs text-muted-foreground">{servers.length}</span>

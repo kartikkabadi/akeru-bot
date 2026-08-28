@@ -30,6 +30,21 @@ describe("reduceConversationFollowState", () => {
     expect(state).toEqual({ followingEnd: false, programmaticScroll: false });
   });
 
+  it("keeps a submitted message in view only when the user was following the end", () => {
+    expect(
+      reduceConversationFollowState(
+        { followingEnd: true, programmaticScroll: false },
+        { type: "message-submitted" },
+      ),
+    ).toEqual({ followingEnd: true, programmaticScroll: true });
+    expect(
+      reduceConversationFollowState(
+        { followingEnd: false, programmaticScroll: false },
+        { type: "message-submitted" },
+      ),
+    ).toEqual({ followingEnd: false, programmaticScroll: false });
+  });
+
   it("re-enables live follow when the user returns to the end", () => {
     const state = reduceConversationFollowState(
       { followingEnd: false, programmaticScroll: false },

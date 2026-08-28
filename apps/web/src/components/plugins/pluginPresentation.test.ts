@@ -9,18 +9,31 @@ import {
 const catalog = loadCatalog();
 
 describe("plugin presentation", () => {
-  it("builds a featured directory with the two focused categories", () => {
+  it("builds a featured directory with the focused categories", () => {
     const sections = buildPluginSections({ plugins: catalog, query: "", filter: "All" });
     expect(sections[0]?.title).toBe("Featured");
+    expect(sections[0]?.layout).toBe("cards");
+    expect(sections[0]?.showViewAll).toBe(true);
     expect(sections[0]?.plugins.map((plugin) => plugin.id)).toEqual([
       "context",
       "exa",
+      "executor",
       "firecrawl",
-      "parallel-search",
     ]);
+
+    const featured = buildPluginSections({ plugins: catalog, query: "", filter: "Featured" });
+    expect(featured[0]?.plugins).toHaveLength(6);
+    expect(featured[0]?.showViewAll).toBe(false);
     expect(sections.some((section) => section.title === "Data Extraction")).toBe(true);
     expect(sections.some((section) => section.title === "Search")).toBe(true);
-    expect(PLUGIN_FILTERS).toEqual(["All", "Featured", "Data Extraction", "Search"]);
+    expect(sections.some((section) => section.title === "Productivity")).toBe(true);
+    expect(PLUGIN_FILTERS).toEqual([
+      "All",
+      "Featured",
+      "Data Extraction",
+      "Search",
+      "Productivity",
+    ]);
   });
 
   it("builds a single searchable installed section", () => {
@@ -40,6 +53,7 @@ describe("plugin presentation", () => {
     expect(searchPlugins[0]?.plugins.map((plugin) => plugin.id)).toEqual([
       "exa",
       "parallel-search",
+      "tinyfish",
     ]);
 
     const extraction = buildPluginSections({

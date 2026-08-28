@@ -3,7 +3,7 @@ import { useMemo } from "react";
 
 import { useThreadShell, useThreadShells } from "../../state/entities";
 import { usePrimaryEnvironmentId } from "../../state/environments";
-import { findLatestBotThreadTarget, findLatestGroupThreadTarget } from "./botThreadRuntime.logic";
+import { findLatestBotThreadTarget } from "./botThreadRuntime.logic";
 import { parseChatPath, resolveBotPresence, type RosterPresence } from "./roster.logic";
 import { useRosterStore } from "./rosterStore";
 
@@ -29,20 +29,28 @@ export function useBotPresence(botId: string): RosterPresence {
   return resolveBotPresence(useThreadShell(ref));
 }
 
-/** Live presence for a group, derived from its latest durable server thread. */
+/**
+ * Live presence for a group across every member thread. Fan-out means several
+ * members can work at once, so the group is working while any member works
+ * and needs the user while any member waits.
+ */
 export function useGroupPresence(groupId: string): RosterPresence {
   const environmentId = usePrimaryEnvironmentId();
   const threadShells = useThreadShells();
-  const ref = useMemo<ScopedThreadRef | null>(() => {
-    const target = environmentId
-      ? findLatestGroupThreadTarget(groupId, environmentId, threadShells)
-      : null;
-    return target
-      ? {
-          environmentId: EnvironmentId.make(target.environmentId),
-          threadId: ThreadId.make(target.threadId),
-        }
-      : null;
+  return useMemo(() => {
+    let working = false;
+    for (const shell of threadShells) {
+      if (
+        shell.environmentId !== environmentId ||
+        shell.groupId !== groupId ||
+        shell.archivedAt !== null
+      ) {
+        continue;
+      }
+      const presence = resolveBotPresence(shell);
+      if (presence === "needs-you") return "needs-you";
+      if (presence === "working") working = true;
+    }
+    return working ? "working" : "idle";
   }, [environmentId, groupId, threadShells]);
-  return resolveBotPresence(useThreadShell(ref));
 }

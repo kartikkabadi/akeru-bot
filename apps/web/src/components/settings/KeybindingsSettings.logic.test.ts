@@ -6,6 +6,7 @@ import {
   buildKeybindingCommandOptions,
   buildWhenVariableOptions,
   commandLabel,
+  isProductKeybindingCommand,
   keybindingConflictLabels,
   keybindingFromKeyboardEvent,
   parseWhenExpressionDraft,
@@ -135,7 +136,7 @@ describe("KeybindingsSettings.logic", () => {
     expect(options).not.toContain("customModeActive");
   });
 
-  it("builds command options from built-in commands and resolved project bindings", () => {
+  it("builds command options from product commands only", () => {
     const options = buildKeybindingCommandOptions([
       {
         command: "script.setup-db.run",
@@ -148,16 +149,39 @@ describe("KeybindingsSettings.logic", () => {
           shiftKey: false,
         },
       },
+      {
+        command: "terminal.toggle",
+        shortcut: {
+          key: "j",
+          modKey: true,
+          metaKey: false,
+          ctrlKey: false,
+          altKey: false,
+          shiftKey: false,
+        },
+      },
     ] satisfies ResolvedKeybindingsConfig);
 
     expect(options).toEqual(
-      expect.arrayContaining([
-        "chat.new",
-        "rightPanel.toggle",
-        "rightPanel.toggleMaximized",
-        "script.setup-db.run",
-      ]),
+      expect.arrayContaining(["rightPanel.toggle", "sidebar.toggle", "modelPicker.toggle"]),
     );
+    expect(options).not.toContain("chat.new");
+    expect(options).not.toContain("rightPanel.toggleMaximized");
+    expect(options).not.toContain("script.setup-db.run");
+    expect(options).not.toContain("terminal.toggle");
+  });
+
+  it("keeps live Akeru commands and drops terminal, thread, and diff commands", () => {
+    expect(isProductKeybindingCommand("sidebar.toggle")).toBe(true);
+    expect(isProductKeybindingCommand("rightPanel.toggle")).toBe(true);
+    expect(isProductKeybindingCommand("commandPalette.toggle")).toBe(true);
+    expect(isProductKeybindingCommand("themeEditor.toggle")).toBe(true);
+    expect(isProductKeybindingCommand("modelPicker.toggle")).toBe(true);
+    expect(isProductKeybindingCommand("modelPicker.jump.1")).toBe(true);
+    expect(isProductKeybindingCommand("terminal.toggle")).toBe(false);
+    expect(isProductKeybindingCommand("thread.settle")).toBe(false);
+    expect(isProductKeybindingCommand("diff.toggle")).toBe(false);
+    expect(isProductKeybindingCommand("chat.new")).toBe(false);
   });
 
   it("reports unknown when variables without rejecting parseable expressions", () => {

@@ -192,6 +192,29 @@ export function useThreadMessages(
   );
 }
 
+const EMPTY_MESSAGE_LISTS: ReadonlyArray<ReadonlyArray<OrchestrationMessage>> = Object.freeze([]);
+const EMPTY_MESSAGE_LISTS_ATOM = Atom.make(EMPTY_MESSAGE_LISTS).pipe(
+  Atom.withLabel("web-thread-message-lists:empty"),
+);
+
+/**
+ * Messages for several threads at once, in ref order. Group chats read one
+ * thread per member, so the ref count varies at runtime and cannot use one
+ * hook call per thread. Callers must memoize refs.
+ */
+export function useThreadMessagesForRefs(
+  refs: ReadonlyArray<ScopedThreadRef>,
+): ReadonlyArray<ReadonlyArray<OrchestrationMessage>> {
+  const atom = useMemo(
+    () =>
+      refs.length === 0
+        ? EMPTY_MESSAGE_LISTS_ATOM
+        : Atom.make((get) => refs.map((ref) => get(environmentThreadDetails.messagesAtom(ref)))),
+    [refs],
+  );
+  return useAtomValue(atom);
+}
+
 export function useThreadActivities(
   ref: ScopedThreadRef | null,
 ): ReadonlyArray<OrchestrationThreadActivity> {

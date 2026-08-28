@@ -1,5 +1,5 @@
 import {
-  STATIC_KEYBINDING_COMMANDS,
+  MODEL_PICKER_JUMP_KEYBINDING_COMMANDS,
   type KeybindingCommand,
   type KeybindingShortcut,
   type KeybindingWhenNode,
@@ -29,6 +29,21 @@ export interface KeybindingRow {
 
 export type WhenVariableOption = string;
 export type KeybindingCommandOption = KeybindingCommand;
+
+export const PRODUCT_KEYBINDING_COMMANDS = [
+  "sidebar.toggle",
+  "rightPanel.toggle",
+  "commandPalette.toggle",
+  "themeEditor.toggle",
+  "modelPicker.toggle",
+  ...MODEL_PICKER_JUMP_KEYBINDING_COMMANDS,
+] as const;
+
+const PRODUCT_KEYBINDING_COMMAND_SET = new Set<string>(PRODUCT_KEYBINDING_COMMANDS);
+
+export function isProductKeybindingCommand(command: KeybindingCommand): boolean {
+  return PRODUCT_KEYBINDING_COMMAND_SET.has(String(command));
+}
 
 const CORE_WHEN_VARIABLES = ["terminalFocus", "terminalOpen", "true", "false"] as const;
 
@@ -256,9 +271,11 @@ export function buildWhenVariableOptions(): ReadonlyArray<WhenVariableOption> {
 export function buildKeybindingCommandOptions(
   keybindings: ResolvedKeybindingsConfig,
 ): ReadonlyArray<KeybindingCommandOption> {
-  const commands = new Set<KeybindingCommand>(STATIC_KEYBINDING_COMMANDS);
+  const commands = new Set<KeybindingCommand>(PRODUCT_KEYBINDING_COMMANDS);
   for (const binding of keybindings) {
-    commands.add(binding.command);
+    if (isProductKeybindingCommand(binding.command)) {
+      commands.add(binding.command);
+    }
   }
   return [...commands].toSorted((left, right) =>
     commandLabel(left).localeCompare(commandLabel(right)),

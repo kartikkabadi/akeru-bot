@@ -4,6 +4,12 @@ const SVG_NS = "http://www.w3.org/2000/svg";
 
 // Inline Lucide-style icon paths (stroke-based, viewBox 0 0 24 24, strokeWidth 2).
 const ICON_PATHS: Record<string, ReadonlyArray<{ tag: string; attrs: Record<string, string> }>> = {
+  "archive-restore": [
+    { tag: "rect", attrs: { width: "20", height: "5", x: "2", y: "3", rx: "1" } },
+    { tag: "path", attrs: { d: "M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8" } },
+    { tag: "path", attrs: { d: "m9 15-3-3 3-3" } },
+    { tag: "path", attrs: { d: "M6 12h6a2 2 0 0 1 2 2v1" } },
+  ],
   archive: [
     { tag: "rect", attrs: { width: "20", height: "5", x: "2", y: "3", rx: "1" } },
     { tag: "path", attrs: { d: "M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8" } },
@@ -13,6 +19,14 @@ const ICON_PATHS: Record<string, ReadonlyArray<{ tag: string; attrs: Record<stri
   "circle-check": [
     { tag: "circle", attrs: { cx: "12", cy: "12", r: "10" } },
     { tag: "path", attrs: { d: "m9 12 2 2 4-4" } },
+  ],
+  "arrow-down": [
+    { tag: "path", attrs: { d: "M12 5v14" } },
+    { tag: "path", attrs: { d: "m19 12-7 7-7-7" } },
+  ],
+  "arrow-up": [
+    { tag: "path", attrs: { d: "m5 12 7-7 7 7" } },
+    { tag: "path", attrs: { d: "M12 19V5" } },
   ],
   clock: [
     { tag: "path", attrs: { d: "M12 6v6l4 2" } },
@@ -69,6 +83,10 @@ const ICON_PATHS: Record<string, ReadonlyArray<{ tag: string; attrs: Record<stri
     },
     { tag: "path", attrs: { d: "M12 8v6" } },
     { tag: "path", attrs: { d: "M9 11h6" } },
+  ],
+  plus: [
+    { tag: "path", attrs: { d: "M5 12h14" } },
+    { tag: "path", attrs: { d: "M12 5v14" } },
   ],
   pin: [
     { tag: "path", attrs: { d: "M12 17v5" } },
@@ -236,10 +254,65 @@ export function showContextMenuFallback<T extends string>(
       resolve(result);
     };
 
+    const enabledButtons = (menu: HTMLDivElement) =>
+      [...menu.querySelectorAll<HTMLButtonElement>("button")].filter((button) => !button.disabled);
+
+    const activeMenuLevel = () => {
+      for (let level = menuStack.length - 1; level >= 0; level -= 1) {
+        if (menuStack[level]?.contains(document.activeElement)) return level;
+      }
+      return -1;
+    };
+
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
         event.preventDefault();
         cleanup(null);
+        return;
+      }
+      if (event.key === "Tab") {
+        cleanup(null);
+        return;
+      }
+
+      const level = activeMenuLevel();
+      const menu = menuStack[level];
+      if (!menu) return;
+      const buttons = enabledButtons(menu);
+      if (buttons.length === 0) return;
+      const currentIndex = buttons.findIndex((button) => button === document.activeElement);
+      let nextIndex: number | null = null;
+      if (event.key === "ArrowDown") {
+        nextIndex = currentIndex < 0 ? 0 : (currentIndex + 1) % buttons.length;
+      } else if (event.key === "ArrowUp") {
+        nextIndex =
+          currentIndex < 0
+            ? buttons.length - 1
+            : (currentIndex - 1 + buttons.length) % buttons.length;
+      } else if (event.key === "Home") {
+        nextIndex = 0;
+      } else if (event.key === "End") {
+        nextIndex = buttons.length - 1;
+      } else if (event.key === "ArrowRight") {
+        const current = buttons[currentIndex];
+        if (current?.getAttribute("aria-haspopup") === "menu") {
+          event.preventDefault();
+          current.click();
+        }
+        return;
+      } else if (event.key === "ArrowLeft" && level > 0) {
+        event.preventDefault();
+        const parentTrigger = submenuTriggerStack[level];
+        closeMenusFromLevel(level);
+        parentTrigger?.focus({ preventScroll: true });
+        return;
+      } else {
+        return;
+      }
+
+      if (buttons.length > 0 && nextIndex !== null) {
+        event.preventDefault();
+        buttons[nextIndex]?.focus({ preventScroll: true });
       }
     };
 
@@ -282,6 +355,8 @@ export function showContextMenuFallback<T extends string>(
       menu.style.left = `${preferredLeft}px`;
       menu.style.top = `${preferredTop}px`;
       menu.dataset.level = String(level);
+      menu.setAttribute("role", "menu");
+      menu.setAttribute("aria-label", level === 0 ? "Context menu" : "Submenu");
 
       const inner = document.createElement("div");
       inner.className =
@@ -314,6 +389,8 @@ export function showContextMenuFallback<T extends string>(
 
         const button = document.createElement("button");
         button.type = "button";
+        button.tabIndex = -1;
+        button.setAttribute("role", "menuitem");
         const isDisabled = item.disabled === true;
         button.disabled = isDisabled;
         const rowBase =
@@ -468,6 +545,10 @@ export function showContextMenuFallback<T extends string>(
 
     requestAnimationFrame(() => {
       canDismissFromPointer = true;
+      const rootMenu = menuStack[0];
+      if (rootMenu && !isNodeWithinMenuStack(document.activeElement, menuStack)) {
+        enabledButtons(rootMenu)[0]?.focus({ preventScroll: true });
+      }
     });
   });
 }

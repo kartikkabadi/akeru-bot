@@ -9,8 +9,6 @@ import { resolveServerBackedAppDisplayName } from "../branding.logic";
 import { AppSidebarLayout } from "../components/AppSidebarLayout";
 import { CommandPalette } from "../components/CommandPalette";
 import { ConfirmDialogHost } from "../components/ConfirmDialogHost";
-import { ConnectOnboardingDialog } from "../components/cloud/ConnectOnboardingDialog";
-import { RelayClientInstallDialog } from "../components/cloud/RelayClientInstallDialog";
 import { SshPasswordPromptDialog } from "../components/desktop/SshPasswordPromptDialog";
 import { ProviderUpdateLaunchNotification } from "../components/ProviderUpdateLaunchNotification";
 import { SlowRpcRequestToastCoordinator } from "../components/SlowRpcRequestToastCoordinator";
@@ -18,7 +16,7 @@ import { ThemeEditorHost } from "../components/settings/ThemeEditorHost";
 import { SettingsDialog } from "../components/settings/SettingsDialog";
 import { PluginsDialog } from "../components/plugins/PluginsDialog";
 import { UsageDialog } from "../components/usage/UsageDialog";
-import { RootRouteErrorView } from "./RootRouteErrorView";
+import { RootRouteErrorView } from "./-RootRouteErrorView";
 import {
   AnchoredToastProvider,
   stackedThreadToast,
@@ -50,6 +48,7 @@ import {
   primaryServerWelcomeAtom,
 } from "../state/server";
 import { readProject, setActiveEnvironmentId, useActiveEnvironmentId } from "../state/entities";
+import { isStandaloneRootPath } from "./-rootRoute.logic";
 import {
   createKeybindingsUpdateToastController,
   type KeybindingsUpdateToastController,
@@ -99,7 +98,7 @@ function RootRouteView() {
     };
   }, [pathname]);
 
-  if (pathname === "/pair" || pathname === "/connect" || pathname.startsWith("/connect/")) {
+  if (isStandaloneRootPath(pathname)) {
     return (
       <>
         <DocumentTitleSync />
@@ -133,8 +132,6 @@ function RootRouteView() {
         <GlassAppearanceSync />
         <FontAppearanceSync />
         {primaryEnvironmentAuthenticated ? <AuthenticatedTracingBootstrap /> : null}
-        <RelayClientInstallDialog />
-        <ConnectOnboardingDialog />
         <SshPasswordPromptDialog />
         <ConfirmDialogHost />
         <SlowRpcRequestToastCoordinator />

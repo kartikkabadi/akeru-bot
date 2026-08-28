@@ -3,9 +3,11 @@ import {
   DragOverlay,
   PointerSensor,
   closestCenter,
+  pointerWithin,
   useDroppable,
   useSensor,
   useSensors,
+  type CollisionDetection,
   type DragEndEvent,
   type DragOverEvent,
   type DragStartEvent,
@@ -14,79 +16,77 @@ import { restrictToFirstScrollableAncestor, snapCenterToCursor } from "@dnd-kit/
 import {
   SortableContext,
   rectSortingStrategy,
-  useSortable,
   verticalListSortingStrategy,
 } from "@dnd-kit/sortable";
-import { CSS } from "@dnd-kit/utilities";
-import { scopeThreadRef } from "@t3tools/client-runtime/environment";
-import { BotId, EnvironmentId, ThreadId } from "@t3tools/contracts";
+import { scopedThreadKey, scopeThreadRef } from "@t3tools/client-runtime/environment";
+import { BotId, EnvironmentId, GroupId, ThreadId } from "@t3tools/contracts";
 import { Link, useLocation, useNavigate } from "@tanstack/react-router";
 import { PlusIcon, SearchIcon } from "lucide-react";
-import { memo, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import {
+  memo,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type MouseEvent as ReactMouseEvent,
+  type ReactNode,
+} from "react";
 import { useShallow } from "zustand/react/shallow";
 
 import { isElectron } from "../../env";
-import { useClientSettings } from "../../hooks/useSettings";
+import { useCopyToClipboard } from "../../hooks/useCopyToClipboard";
+import { readLocalApi } from "../../localApi";
 import { cn, randomUUID } from "../../lib/utils";
 import { botEnvironment } from "../../state/bots";
-import { useThreadMessages, useThreadShells } from "../../state/entities";
+import { readThreadShell, useThreadShells } from "../../state/entities";
 import { usePrimaryEnvironmentId } from "../../state/environments";
 import { useAtomCommand } from "../../state/use-atom-command";
+import { useUiStateStore } from "../../uiStateStore";
 import { SidebarChromeFooter } from "../sidebar/SidebarChrome";
 import { Button } from "../ui/button";
 import { SidebarContent, SidebarGroup, SidebarHeader, SidebarTrigger } from "../ui/sidebar";
 import { toastManager } from "../ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
-import { BotAvatarView } from "./BotAvatarView";
-import { visibleBotChatMessages } from "./botConversationPresentation";
-import { useBotPresence } from "./botPresence";
+import { requestBotDetailsPanelOpen } from "./botDetailsPanelEvents";
 import { findLatestBotThreadTarget } from "./botThreadRuntime.logic";
 import { NewBotDialog } from "./NewBotDialog";
+import { NewGroupDialog } from "./NewGroupDialog";
 import {
+  buildBotRosterMenuItems,
   buildGroupedRosterSections,
+  buildGroupRosterMenuItems,
   buildRosterStrip,
   filterRosterBots,
-  formatRosterTimestamp,
   isRecordableChatPath,
   parseChatPath,
-  resolveLatestRosterMessage,
-  resolveRosterIndicator,
-  type RosterLastMessage,
-  type RosterPresence,
+  type BotRosterMenuAction,
+  type GroupRosterMenuAction,
 } from "./roster.logic";
-import { moveRosterBot, useRosterStore } from "./rosterStore";
+import {
+  BotDragOverlay,
+  BotRosterRow,
+  BotStripTile,
+  GroupRosterRow,
+  RailBotButton,
+} from "./BotRosterRows";
+import {
+  advanceRosterDragTarget,
+  previewRosterDrag,
+  resolveRosterDropTarget,
+  useRosterStore,
+} from "./rosterStore";
 import type { Bot, BotAvatar } from "./types";
 import { useServerRosterSync } from "./useServerRoster";
 
-/** Avatar with a yellow needs-you light and a green working light. */
-function RosterAvatar({
-  bot,
-  presence,
-  className,
-  dotClassName,
-}: {
-  bot: Bot;
-  presence: RosterPresence;
-  className: string;
-  dotClassName?: string;
-}) {
-  const indicator = resolveRosterIndicator(presence);
-  return (
-    <span className="relative shrink-0">
-      <BotAvatarView avatar={bot.avatar} name={bot.name} state={presence} className={className} />
-      {indicator !== null ? (
-        <span
-          data-testid="bot-presence-dot"
-          data-status={indicator}
-          className={cn(
-            "absolute -bottom-px -right-px rounded-full ring-1 ring-sidebar",
-            indicator === "working" ? "bg-success" : "bg-warning",
-            dotClassName ?? "size-2",
-          )}
-        />
-      ) : null}
-    </span>
-  );
+type RosterAddMenuAction = "new-bot" | "new-group" | "restore" | `restore:${string}`;
+
+function menuPosition(event: ReactMouseEvent<HTMLElement>) {
+  if (event.type === "contextmenu" && (event.clientX !== 0 || event.clientY !== 0)) {
+    return { x: event.clientX, y: event.clientY };
+  }
+  const rect = event.currentTarget.getBoundingClientRect();
+  return { x: rect.right, y: rect.bottom };
 }
 
 /**
@@ -97,9 +97,9 @@ function RosterAvatar({
  * rail supplies its own new-bot button.
  */
 const RosterSidebarHeader = memo(function RosterSidebarHeader({
-  onNewBot,
+  onAdd,
 }: {
-  onNewBot: () => void;
+  onAdd: (event: ReactMouseEvent<HTMLButtonElement>) => void;
 }) {
   return (
     <SidebarHeader
@@ -125,10 +125,11 @@ const RosterSidebarHeader = memo(function RosterSidebarHeader({
             <TooltipTrigger
               render={
                 <Button
-                  aria-label="New bot"
-                  data-testid="roster-new-bot"
+                  aria-label="Add bot or group"
+                  aria-haspopup="menu"
+                  data-testid="roster-add"
                   className="size-[var(--workspace-titlebar-control-size)]! [-webkit-app-region:no-drag]"
-                  onClick={onNewBot}
+                  onClick={onAdd}
                   size="icon"
                   variant="ghost"
                 >
@@ -136,178 +137,13 @@ const RosterSidebarHeader = memo(function RosterSidebarHeader({
                 </Button>
               }
             />
-            <TooltipPopup side="bottom">New bot</TooltipPopup>
+            <TooltipPopup side="bottom">Add</TooltipPopup>
           </Tooltip>
         </div>
       </div>
     </SidebarHeader>
   );
 });
-
-const BotStripTile = memo(function BotStripTile({
-  bot,
-  isActive,
-  onSelect,
-}: {
-  bot: Bot;
-  isActive: boolean;
-  onSelect: (bot: Bot) => void;
-}) {
-  const presence = useBotPresence(bot.id);
-  const { listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: bot.id });
-  return (
-    <li
-      ref={setNodeRef}
-      className={cn("list-none touch-pan-y", isDragging && "opacity-0")}
-      style={{ transform: CSS.Transform.toString(transform), transition }}
-      {...listeners}
-    >
-      <button
-        type="button"
-        data-testid="roster-strip-tile"
-        data-bot-hover
-        aria-current={isActive || undefined}
-        onClick={() => onSelect(bot)}
-        className={cn(
-          "flex w-20 cursor-grab flex-col items-center gap-2 rounded-xl px-1 pb-2 pt-3 outline-none select-none focus-visible:ring-2 focus-visible:ring-ring active:cursor-grabbing",
-          isActive ? "bg-sidebar-row-active" : "bg-transparent hover:bg-sidebar-row-hover",
-        )}
-      >
-        <RosterAvatar bot={bot} presence={presence} className="size-14" />
-        <span className="w-full truncate text-center text-xs text-sidebar-foreground">
-          {bot.name}
-        </span>
-      </button>
-    </li>
-  );
-});
-
-function useLatestBotMessage(
-  botId: string,
-  fallback: RosterLastMessage | null,
-  working: boolean,
-): RosterLastMessage | null {
-  const rememberedPath = useRosterStore((state) => state.chatPathByBotId[botId]);
-  const environmentId = usePrimaryEnvironmentId();
-  const threadShells = useThreadShells();
-  const threadRef = useMemo(() => {
-    const durableTarget = environmentId
-      ? findLatestBotThreadTarget(botId, environmentId, threadShells)
-      : null;
-    const target = durableTarget ?? (rememberedPath ? parseChatPath(rememberedPath) : null);
-    return target
-      ? scopeThreadRef(EnvironmentId.make(target.environmentId), ThreadId.make(target.threadId))
-      : null;
-  }, [botId, environmentId, rememberedPath, threadShells]);
-  const messages = useThreadMessages(threadRef);
-  const visibleMessages = useMemo(
-    () => visibleBotChatMessages(messages, working),
-    [messages, working],
-  );
-  return useMemo(
-    () => resolveLatestRosterMessage(fallback, visibleMessages),
-    [fallback, visibleMessages],
-  );
-}
-
-const BotRosterRow = memo(function BotRosterRow({
-  bot,
-  lastMessage,
-  isActive,
-  onSelect,
-}: {
-  bot: Bot;
-  lastMessage: RosterLastMessage | null;
-  isActive: boolean;
-  onSelect: (bot: Bot) => void;
-}) {
-  const timestampFormat = useClientSettings((s) => s.timestampFormat);
-  const presence = useBotPresence(bot.id);
-  const latestMessage = useLatestBotMessage(bot.id, lastMessage, presence === "working");
-  const { listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: bot.id });
-  return (
-    <li
-      ref={setNodeRef}
-      className={cn("list-none touch-pan-y", isDragging && "opacity-0")}
-      style={{ transform: CSS.Transform.toString(transform), transition }}
-      {...listeners}
-    >
-      <div
-        data-testid="roster-bot-row"
-        data-bot-hover
-        className={cn(
-          "flex w-full items-center rounded-lg outline-none select-none",
-          isActive
-            ? "bg-sidebar-row-active text-sidebar-foreground"
-            : "bg-transparent text-sidebar-foreground hover:bg-sidebar-row-hover",
-        )}
-      >
-        <button
-          type="button"
-          aria-current={isActive || undefined}
-          onClick={() => onSelect(bot)}
-          className="flex min-w-0 flex-1 cursor-pointer items-center gap-2.5 rounded-lg px-2 py-1.5 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring"
-        >
-          <RosterAvatar bot={bot} presence={presence} className="size-10" />
-          <span className="flex min-w-0 flex-1 flex-col">
-            <span className="flex items-baseline gap-2">
-              <span className="min-w-0 flex-1 truncate text-sm font-semibold">{bot.name}</span>
-              {latestMessage ? (
-                <span className="shrink-0 text-xs tabular-nums text-sidebar-muted-foreground">
-                  {formatRosterTimestamp(latestMessage.at, timestampFormat)}
-                </span>
-              ) : null}
-            </span>
-            {latestMessage ? (
-              <span className="truncate text-[13px] text-sidebar-muted-foreground">
-                {latestMessage.text}
-              </span>
-            ) : null}
-          </span>
-        </button>
-      </div>
-    </li>
-  );
-});
-
-/** One avatar in the icon-collapsed rail, with a name tooltip. */
-function RailBotButton({
-  bot,
-  isActive,
-  onSelect,
-}: {
-  bot: Bot;
-  isActive: boolean;
-  onSelect: (bot: Bot) => void;
-}) {
-  const presence = useBotPresence(bot.id);
-  return (
-    <Tooltip>
-      <TooltipTrigger
-        render={
-          <button
-            type="button"
-            data-bot-hover
-            aria-current={isActive || undefined}
-            onClick={() => onSelect(bot)}
-            className={cn(
-              "flex size-9 cursor-pointer items-center justify-center rounded-lg outline-none select-none focus-visible:ring-2 focus-visible:ring-ring",
-              isActive ? "bg-sidebar-row-active" : "bg-transparent hover:bg-sidebar-row-hover",
-            )}
-          >
-            <RosterAvatar
-              bot={bot}
-              presence={presence}
-              className="size-7"
-              dotClassName="size-1.5"
-            />
-          </button>
-        }
-      />
-      <TooltipPopup side="right">{bot.name}</TooltipPopup>
-    </Tooltip>
-  );
-}
 
 function RosterDropZone({
   id,
@@ -331,22 +167,96 @@ function RosterDropZone({
   );
 }
 
-function BotDragOverlay({ bot }: { bot: Bot }) {
-  const presence = useBotPresence(bot.id);
+const rosterCollisionDetection: CollisionDetection = (args) => {
+  const pointerHits = pointerWithin(args);
+  if (pointerHits.length > 0) {
+    const botHit = pointerHits.find(({ id }) => id !== "pinned-zone" && id !== "unpinned-zone");
+    return botHit ? [botHit] : pointerHits.slice(0, 1);
+  }
+  return closestCenter(args);
+};
+
+function resolveFinalDropId(event: DragEndEvent): string | null {
+  const activeId = String(event.active.id);
+  const activator = event.activatorEvent;
+  const start =
+    "clientX" in activator &&
+    typeof activator.clientX === "number" &&
+    "clientY" in activator &&
+    typeof activator.clientY === "number"
+      ? { x: activator.clientX, y: activator.clientY }
+      : null;
+  if (!start) {
+    return resolveRosterDropTarget(activeId, [], event.over ? String(event.over.id) : null);
+  }
+
+  const point = { x: start.x + event.delta.x, y: start.y + event.delta.y };
+  const hitTargetIds = document.elementsFromPoint(point.x, point.y).flatMap((element) => {
+    const target = element.closest<HTMLElement>("[data-roster-drop-id],[data-drop-zone]");
+    const targetId = target?.dataset.rosterDropId ?? target?.dataset.dropZone;
+    return targetId ? [targetId] : [];
+  });
+  return resolveRosterDropTarget(activeId, hitTargetIds, event.over ? String(event.over.id) : null);
+}
+
+const ROSTER_LOADING_ROWS = ["first", "second", "third"] as const;
+
+function BotRosterLoadingState() {
   return (
-    <div className="flex w-20 cursor-grabbing flex-col items-center gap-2 rounded-xl bg-sidebar-row-hover px-1 pb-2 pt-3 text-sidebar-foreground shadow-xl select-none">
-      <RosterAvatar bot={bot} presence={presence} className="size-14" />
-      <span className="w-full truncate text-center text-xs">{bot.name}</span>
+    <div
+      aria-label="Loading bots"
+      className="flex flex-col gap-1 px-4 py-2 group-data-[collapsible=icon]:items-center group-data-[collapsible=icon]:px-0"
+      role="status"
+    >
+      {ROSTER_LOADING_ROWS.map((row, index) => (
+        <div
+          className="flex h-12 items-center gap-3 rounded-lg px-2 group-data-[collapsible=icon]:size-10 group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:p-0"
+          key={row}
+        >
+          <div className="size-8 shrink-0 rounded-full bg-sidebar-row-hover" />
+          <div className="min-w-0 flex-1 space-y-2 group-data-[collapsible=icon]:hidden">
+            <div
+              className={cn("h-3 rounded-full bg-sidebar-row-hover", index === 1 ? "w-20" : "w-24")}
+            />
+            <div className="h-2.5 w-32 rounded-full bg-sidebar-row-hover/70" />
+          </div>
+        </div>
+      ))}
     </div>
   );
 }
 
 export default function BotRosterSidebar() {
-  useServerRosterSync();
+  const rosterLoading = useServerRosterSync();
   const navigate = useNavigate();
   const environmentId = usePrimaryEnvironmentId();
-  const createBotCommand = useAtomCommand(botEnvironment.create, { reportFailure: false });
+  const createBotCommand = useAtomCommand(botEnvironment.create, {
+    reportFailure: false,
+  });
+  const updateBotCommand = useAtomCommand(botEnvironment.update, {
+    reportFailure: false,
+  });
+  const archiveBotCommand = useAtomCommand(botEnvironment.archive, {
+    reportFailure: false,
+  });
+  const restoreBotCommand = useAtomCommand(botEnvironment.restore, {
+    reportFailure: false,
+  });
+  const deleteBotCommand = useAtomCommand(botEnvironment.delete, {
+    reportFailure: false,
+  });
+  const createGroupCommand = useAtomCommand(botEnvironment.groups.create, {
+    reportFailure: false,
+  });
+  const renameGroupCommand = useAtomCommand(botEnvironment.groups.rename, {
+    reportFailure: false,
+  });
+  const deleteGroupCommand = useAtomCommand(botEnvironment.groups.delete, {
+    reportFailure: false,
+  });
   const pathname = useLocation({ select: (location) => location.pathname });
+  const threadShells = useThreadShells();
+  const markThreadUnread = useUiStateStore((state) => state.markThreadUnread);
   const { bots, groups, lastMessageByBotId, selectedBotId } = useRosterStore(
     useShallow((state) => ({
       bots: state.bots,
@@ -356,10 +266,35 @@ export default function BotRosterSidebar() {
     })),
   );
   const [query, setQuery] = useState("");
+  const [renamingGroupId, setRenamingGroupId] = useState<string | null>(null);
+  const [renamingGroupName, setRenamingGroupName] = useState("");
   const [dragLayout, setDragLayout] = useState<Bot[] | null>(null);
   const dragLayoutRef = useRef<Bot[] | null>(null);
+  const lastOverIdRef = useRef<string | null>(null);
   const [activeBotId, setActiveBotId] = useState<string | null>(null);
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }));
+  const { copyToClipboard: copyBotId } = useCopyToClipboard<{ botId: string }>({
+    target: "bot ID",
+    onCopy: ({ botId }) =>
+      toastManager.add({
+        type: "success",
+        title: "Bot ID copied",
+        description: botId,
+      }),
+    onError: () => toastManager.add({ type: "error", title: "Could not copy bot ID" }),
+  });
+  const { copyToClipboard: copyConversationId } = useCopyToClipboard<{
+    conversationId: string;
+  }>({
+    target: "conversation ID",
+    onCopy: ({ conversationId }) =>
+      toastManager.add({
+        type: "success",
+        title: "Conversation ID copied",
+        description: conversationId,
+      }),
+    onError: () => toastManager.add({ type: "error", title: "Could not copy conversation ID" }),
+  });
 
   const strip = useMemo(
     () => buildRosterStrip(bots, lastMessageByBotId),
@@ -375,41 +310,51 @@ export default function BotRosterSidebar() {
     () => buildGroupedRosterSections(visibleBots, groups),
     [groups, visibleBots],
   );
+  const orderedUnpinnedBotIds = useMemo(() => unpinnedBots.map((bot) => bot.id), [unpinnedBots]);
   const activeBot =
     activeBotId === null
       ? null
       : ((dragLayout ?? bots).find((bot) => bot.id === activeBotId) ?? null);
 
-  const resolveDrop = (layout: readonly Bot[], overId: string) => {
-    if (overId === "pinned-zone") return { overBotId: null, pinned: true } as const;
-    if (overId === "unpinned-zone") return { overBotId: null, pinned: false } as const;
-    const overBot = layout.find((bot) => bot.id === overId);
-    return overBot ? { overBotId: overBot.id, pinned: overBot.pinned } : null;
-  };
   const handleDragStart = ({ active }: DragStartEvent) => {
     dragLayoutRef.current = bots;
+    lastOverIdRef.current = null;
     setActiveBotId(String(active.id));
     setDragLayout(bots);
   };
   const handleDragOver = ({ active, over }: DragOverEvent) => {
-    if (!over) return;
-    setDragLayout((current) => {
-      const layout = current ?? bots;
-      const drop = resolveDrop(layout, String(over.id));
-      if (!drop) return layout;
-      const next = moveRosterBot(layout, String(active.id), drop.overBotId, drop.pinned) ?? layout;
-      dragLayoutRef.current = next;
-      return next;
-    });
+    const activeId = String(active.id);
+    const target = advanceRosterDragTarget(
+      lastOverIdRef.current,
+      activeId,
+      over ? String(over.id) : null,
+    );
+    lastOverIdRef.current = target.lastOverId;
+    if (!target.previewTargetId) return;
+    const layout = dragLayoutRef.current ?? bots;
+    const next = previewRosterDrag(layout, activeId, target.previewTargetId, orderedUnpinnedBotIds);
+    if (!next) {
+      lastOverIdRef.current = null;
+      return;
+    }
+    dragLayoutRef.current = next;
+    setDragLayout(next);
   };
   const finishDrag = () => {
     dragLayoutRef.current = null;
+    lastOverIdRef.current = null;
     setActiveBotId(null);
     setDragLayout(null);
   };
-  const handleDragEnd = ({ over }: DragEndEvent) => {
-    if (over && dragLayoutRef.current) {
-      useRosterStore.getState().commitBotLayout(dragLayoutRef.current);
+  const handleDragEnd = (event: DragEndEvent) => {
+    const overId = resolveFinalDropId(event);
+    if (overId) {
+      const layout = dragLayoutRef.current ?? bots;
+      const finalLayout =
+        lastOverIdRef.current === overId
+          ? layout
+          : previewRosterDrag(layout, String(event.active.id), overId, orderedUnpinnedBotIds);
+      if (finalLayout) useRosterStore.getState().commitBotLayout(finalLayout);
     }
     finishDrag();
   };
@@ -429,18 +374,51 @@ export default function BotRosterSidebar() {
     useRosterStore.getState().recordChatPath(selectedBotId, pathname);
   }, [pathname, selectedBotId]);
 
-  const handleSelect = (bot: Bot) => {
-    pendingClickedBotIdRef.current = bot.id;
-    useRosterStore.getState().selectBot(bot.id);
-    void navigate({ to: "/bots/$botId", params: { botId: bot.id } });
-  };
+  const handleSelect = useCallback(
+    (bot: Bot) => {
+      pendingClickedBotIdRef.current = bot.id;
+      useRosterStore.getState().selectBot(bot.id);
+      void navigate({ to: "/bots/$botId", params: { botId: bot.id } });
+    },
+    [navigate],
+  );
+
+  const conversationRefForBot = useCallback(
+    (botId: string) => {
+      const rememberedPath = useRosterStore.getState().chatPathByBotId[botId];
+      const target =
+        (environmentId ? findLatestBotThreadTarget(botId, environmentId, threadShells) : null) ??
+        (rememberedPath ? parseChatPath(rememberedPath) : null);
+      return target
+        ? scopeThreadRef(EnvironmentId.make(target.environmentId), ThreadId.make(target.threadId))
+        : null;
+    },
+    [environmentId, threadShells],
+  );
+
+  const openBotProfile = useCallback(
+    async (bot: Bot) => {
+      pendingClickedBotIdRef.current = bot.id;
+      useRosterStore.getState().selectBot(bot.id);
+      await navigate({ to: "/bots/$botId", params: { botId: bot.id } });
+      requestBotDetailsPanelOpen(bot.id);
+    },
+    [navigate],
+  );
 
   const [newBotOpen, setNewBotOpen] = useState(false);
+  const [newGroupOpen, setNewGroupOpen] = useState(false);
   const [pendingCreatedBotId, setPendingCreatedBotId] = useState<string | null>(null);
-  const handleNewBot = () => setNewBotOpen(true);
+  const [pendingCreatedGroupId, setPendingCreatedGroupId] = useState<string | null>(null);
+  const handleNewBot = useCallback(() => {
+    setNewBotOpen(true);
+  }, []);
   const handleCreateBot = async ({ name, avatar }: { name: string; avatar: BotAvatar }) => {
     if (environmentId === null) {
-      toastManager.add({ type: "error", title: "Connect an environment first" });
+      toastManager.add({
+        type: "error",
+        title: "Connect an environment first",
+      });
       return;
     }
     const botId = BotId.make(`bot-${randomUUID()}`);
@@ -468,6 +446,96 @@ export default function BotRosterSidebar() {
     setPendingCreatedBotId(botId);
   };
 
+  const handleCreateGroup = async ({
+    name,
+    botIds,
+  }: {
+    name: string;
+    botIds: readonly string[];
+  }) => {
+    if (environmentId === null) {
+      toastManager.add({ type: "error", title: "Connect an environment first" });
+      return;
+    }
+    const [firstBotId, ...remainingBotIds] = botIds;
+    if (firstBotId === undefined) return;
+    const groupId = GroupId.make(`group-${randomUUID()}`);
+    const result = await createGroupCommand({
+      environmentId,
+      input: {
+        groupId,
+        name: name.trim(),
+        bossBotId: BotId.make(firstBotId),
+        ...(remainingBotIds.length > 0
+          ? { specialistBotIds: remainingBotIds.map((botId) => BotId.make(botId)) }
+          : {}),
+      },
+    });
+    if (result._tag === "Failure") {
+      toastManager.add({ type: "error", title: "Could not create group" });
+      return;
+    }
+    setNewGroupOpen(false);
+    setPendingCreatedGroupId(groupId);
+  };
+
+  const handleAddMenu = useCallback(
+    async (event: ReactMouseEvent<HTMLButtonElement>) => {
+      const api = readLocalApi();
+      if (!api) return;
+      const archivedBots = bots.filter((bot) => bot.archivedAt !== null);
+      const action = await api.contextMenu.show<RosterAddMenuAction>(
+        [
+          { id: "new-bot", label: "New bot", icon: "plus" },
+          { id: "new-group", label: "New group", icon: "folder" },
+          {
+            id: "restore",
+            label: "Restore bot",
+            icon: "archive-restore",
+            disabled: archivedBots.length === 0,
+            separatorBefore: true,
+            children: archivedBots.map((bot) => ({
+              id: `restore:${bot.id}` as const,
+              label: bot.name,
+            })),
+          },
+        ],
+        menuPosition(event),
+      );
+      if (action === "new-bot") {
+        handleNewBot();
+        return;
+      }
+      if (action === "new-group") {
+        setNewGroupOpen(true);
+        return;
+      }
+      if (!action?.startsWith("restore:")) return;
+      if (environmentId === null) {
+        toastManager.add({ type: "error", title: "Connect an environment first" });
+        return;
+      }
+      const result = await restoreBotCommand({
+        environmentId,
+        input: { botId: BotId.make(action.slice(8)) },
+      });
+      if (result._tag === "Failure") {
+        toastManager.add({ type: "error", title: "Could not restore bot" });
+      }
+    },
+    [bots, environmentId, handleNewBot, restoreBotCommand],
+  );
+
+  useEffect(() => {
+    if (pendingCreatedGroupId === null) return;
+    if (!groups.some((group) => group.id === pendingCreatedGroupId)) return;
+    setPendingCreatedGroupId(null);
+    void navigate({
+      to: "/groups/$groupId",
+      params: { groupId: pendingCreatedGroupId },
+    });
+  }, [groups, navigate, pendingCreatedGroupId]);
+
   useEffect(() => {
     if (pendingCreatedBotId === null) return;
     const bot = bots.find((candidate) => candidate.id === pendingCreatedBotId);
@@ -478,10 +546,184 @@ export default function BotRosterSidebar() {
     void navigate({ to: "/", replace: true });
   }, [bots, navigate, pendingCreatedBotId]);
 
+  const handleBotContextMenu = useCallback(
+    async (event: ReactMouseEvent<HTMLElement>, bot: Bot) => {
+      event.preventDefault();
+      event.stopPropagation();
+      const api = readLocalApi();
+      if (!api || environmentId === null) return;
+      const conversationRef = conversationRefForBot(bot.id);
+      const action = await api.contextMenu.show<BotRosterMenuAction>(
+        buildBotRosterMenuItems(bot, groups, conversationRef !== null),
+        menuPosition(event),
+      );
+      if (action === null) return;
+
+      if (action === "pin" || action === "unpin") {
+        useRosterStore.getState().moveBot(bot.id, null, action === "pin");
+        return;
+      }
+      if (action.startsWith("move:")) {
+        const groupId = action === "move:unassigned" ? null : GroupId.make(action.slice(5));
+        const result = await updateBotCommand({
+          environmentId,
+          input: { botId: BotId.make(bot.id), groupId },
+        });
+        if (result._tag === "Failure") {
+          toastManager.add({ type: "error", title: "Could not move bot" });
+        }
+        return;
+      }
+      if (action === "mark-unread" && conversationRef !== null) {
+        const thread = readThreadShell(conversationRef);
+        markThreadUnread(scopedThreadKey(conversationRef), thread?.latestTurn?.completedAt);
+        return;
+      }
+      if (action === "edit-profile") {
+        await openBotProfile(bot);
+        return;
+      }
+      if (action === "duplicate") {
+        const botId = BotId.make(`bot-${randomUUID()}`);
+        const result = await createBotCommand({
+          environmentId,
+          input: {
+            botId,
+            name: `${bot.name} copy`,
+            title: bot.title,
+            label: bot.label,
+            description: bot.description,
+            disabledMcpServerIds: [...bot.disabledMcpServerIds],
+            avatar: { ...bot.avatar },
+            engine: bot.engine ? { ...bot.engine } : null,
+            sandbox: bot.sandbox,
+            runtimeMode: bot.runtimeMode,
+            usageCap: bot.usageCap ? { ...bot.usageCap } : null,
+            groupId: bot.groupId === null ? null : GroupId.make(bot.groupId),
+          },
+        });
+        if (result._tag === "Failure") {
+          toastManager.add({ type: "error", title: "Could not duplicate bot" });
+          return;
+        }
+        setPendingCreatedBotId(botId);
+        return;
+      }
+      if (action === "copy-conversation-id" && conversationRef !== null) {
+        copyConversationId(conversationRef.threadId, {
+          conversationId: conversationRef.threadId,
+        });
+        return;
+      }
+      if (action === "copy-bot-id") {
+        copyBotId(bot.id, { botId: bot.id });
+        return;
+      }
+      if (action === "archive") {
+        const result = await archiveBotCommand({
+          environmentId,
+          input: { botId: BotId.make(bot.id) },
+        });
+        if (result._tag === "Failure") {
+          toastManager.add({ type: "error", title: "Could not archive bot" });
+        }
+        return;
+      }
+      if (action !== "delete") return;
+      const confirmed = await api.dialogs.confirm(
+        [`Delete ${bot.name}?`, "The bot profile will be permanently deleted."].join("\n"),
+        { variant: "destructive" },
+      );
+      if (!confirmed) return;
+      const result = await deleteBotCommand({
+        environmentId,
+        input: { botId: BotId.make(bot.id) },
+      });
+      if (result._tag === "Failure") {
+        toastManager.add({ type: "error", title: "Could not delete bot" });
+      }
+    },
+    [
+      archiveBotCommand,
+      conversationRefForBot,
+      copyBotId,
+      copyConversationId,
+      createBotCommand,
+      deleteBotCommand,
+      environmentId,
+      groups,
+      markThreadUnread,
+      openBotProfile,
+      updateBotCommand,
+    ],
+  );
+
+  const startGroupRename = useCallback((groupId: string, name: string) => {
+    setRenamingGroupId(groupId);
+    setRenamingGroupName(name);
+  }, []);
+
+  const navigateToGroup = useCallback(
+    (groupId: string) => {
+      void navigate({ to: "/groups/$groupId", params: { groupId } });
+    },
+    [navigate],
+  );
+
+  const commitGroupRename = async (groupId: string, originalName: string) => {
+    const name = renamingGroupName.trim();
+    setRenamingGroupId(null);
+    if (!name || name === originalName || environmentId === null) return;
+    const result = await renameGroupCommand({
+      environmentId,
+      input: { groupId: GroupId.make(groupId), name },
+    });
+    if (result._tag === "Failure") {
+      toastManager.add({ type: "error", title: "Could not rename group" });
+    }
+  };
+
+  const handleGroupContextMenu = useCallback(
+    async (event: ReactMouseEvent<HTMLElement>, group: { id: string; name: string }) => {
+      event.preventDefault();
+      event.stopPropagation();
+      const api = readLocalApi();
+      if (!api || environmentId === null) return;
+      const groupIndex = groups.findIndex((candidate) => candidate.id === group.id);
+      const action = await api.contextMenu.show<GroupRosterMenuAction>(
+        buildGroupRosterMenuItems(groupIndex, groups.length),
+        menuPosition(event),
+      );
+      if (action === "rename") {
+        startGroupRename(group.id, group.name);
+        return;
+      }
+      if (action === "move-up" || action === "move-down") {
+        useRosterStore.getState().moveGroup(group.id, action === "move-up" ? "up" : "down");
+        return;
+      }
+      if (action !== "delete") return;
+      const confirmed = await api.dialogs.confirm(
+        `Delete ${group.name}? Bots in this group will move to Unassigned.`,
+        { variant: "destructive" },
+      );
+      if (!confirmed) return;
+      const result = await deleteGroupCommand({
+        environmentId,
+        input: { groupId: GroupId.make(group.id) },
+      });
+      if (result._tag === "Failure") {
+        toastManager.add({ type: "error", title: "Could not delete group" });
+      }
+    },
+    [deleteGroupCommand, environmentId, groups, startGroupRename],
+  );
+
   return (
     <>
-      <RosterSidebarHeader onNewBot={handleNewBot} />
+      <RosterSidebarHeader onAdd={handleAddMenu} />
       <SidebarContent
+        aria-busy={rosterLoading}
         className="gap-0"
         fixedHeader={
           <SidebarGroup className="px-[var(--sidebar-content-inset)] pb-1 pt-1 group-data-[collapsible=icon]:hidden">
@@ -505,7 +747,9 @@ export default function BotRosterSidebar() {
           </SidebarGroup>
         }
       >
-        {bots.every((bot) => bot.archivedAt !== null) ? (
+        {rosterLoading ? (
+          <BotRosterLoadingState />
+        ) : groups.length === 0 && bots.every((bot) => bot.archivedAt !== null) ? (
           <div className="px-2 py-6 text-center text-sm text-sidebar-muted-foreground">
             No bots yet
           </div>
@@ -520,13 +764,14 @@ export default function BotRosterSidebar() {
                       bot={bot}
                       isActive={selectedBotId === bot.id}
                       onSelect={handleSelect}
+                      onOpenMenu={handleBotContextMenu}
                     />
                   </li>
                 ))}
               </ul>
             </SidebarGroup>
             <DndContext
-              collisionDetection={closestCenter}
+              collisionDetection={rosterCollisionDetection}
               sensors={sensors}
               modifiers={[restrictToFirstScrollableAncestor]}
               onDragStart={handleDragStart}
@@ -557,6 +802,7 @@ export default function BotRosterSidebar() {
                             bot={bot}
                             isActive={selectedBotId === bot.id}
                             onSelect={handleSelect}
+                            onOpenMenu={handleBotContextMenu}
                           />
                         ))}
                       </ul>
@@ -570,46 +816,69 @@ export default function BotRosterSidebar() {
                   className="min-h-12 rounded-lg transition-colors data-[drag-over=true]:bg-sidebar-row-hover"
                 >
                   <SortableContext
-                    items={unpinnedBots.map((bot) => bot.id)}
+                    items={orderedUnpinnedBotIds}
                     strategy={verticalListSortingStrategy}
                   >
                     <div className="flex flex-col gap-2">
-                      {groupSections.map((section) => (
-                        <section key={section.id} aria-label={section.name}>
-                          <div className="mb-0.5 flex items-baseline gap-2 px-2 py-0.5">
-                            {section.id === "unassigned" ? (
-                              <span className="text-[13px] font-medium text-sidebar-muted-foreground">
-                                {section.name}
-                              </span>
+                      {/* Group chats first, then every bot as its own DM row. */}
+                      {groupSections
+                        .filter((section) => section.id !== "unassigned")
+                        .map((section) => (
+                          <section key={section.id} aria-label={section.name}>
+                            {renamingGroupId === section.id ? (
+                              <div className="mb-0.5 flex items-center gap-1 px-2 py-0.5">
+                                <input
+                                  autoFocus
+                                  aria-label={`Rename ${section.name}`}
+                                  value={renamingGroupName}
+                                  onFocus={(event) => event.currentTarget.select()}
+                                  onChange={(event) =>
+                                    setRenamingGroupName(event.currentTarget.value)
+                                  }
+                                  onBlur={() => void commitGroupRename(section.id, section.name)}
+                                  onKeyDown={(event) => {
+                                    if (event.key === "Enter") {
+                                      event.preventDefault();
+                                      event.currentTarget.blur();
+                                    } else if (event.key === "Escape") {
+                                      event.preventDefault();
+                                      setRenamingGroupId(null);
+                                    }
+                                  }}
+                                  className="min-w-0 flex-1 rounded bg-sidebar-row-hover px-1 text-[13px] font-medium text-sidebar-foreground outline-none ring-ring focus:ring-2"
+                                />
+                              </div>
                             ) : (
-                              <button
-                                type="button"
-                                aria-current={pathname === `/groups/${section.id}` || undefined}
-                                className="rounded text-[13px] font-medium text-sidebar-muted-foreground outline-none hover:text-sidebar-foreground focus-visible:ring-2 focus-visible:ring-ring"
-                                onClick={() =>
-                                  void navigate({
-                                    to: "/groups/$groupId",
-                                    params: { groupId: section.id },
-                                  })
-                                }
-                              >
-                                {section.name}
-                              </button>
+                              <ul className="flex flex-col gap-px">
+                                <GroupRosterRow
+                                  id={section.id}
+                                  name={section.name}
+                                  members={section.bots}
+                                  isActive={pathname === `/groups/${section.id}`}
+                                  onNavigate={navigateToGroup}
+                                  onOpenMenu={handleGroupContextMenu}
+                                />
+                              </ul>
                             )}
-                          </div>
-                          <ul className="flex min-h-12 flex-col gap-px">
-                            {section.bots.map((bot) => (
-                              <BotRosterRow
-                                key={bot.id}
-                                bot={bot}
-                                lastMessage={lastMessageByBotId[bot.id] ?? null}
-                                isActive={selectedBotId === bot.id}
-                                onSelect={handleSelect}
-                              />
-                            ))}
-                          </ul>
-                        </section>
-                      ))}
+                          </section>
+                        ))}
+                      <ul
+                        className={cn(
+                          "flex flex-col gap-px",
+                          unpinnedBots.length > 0 && "min-h-12",
+                        )}
+                      >
+                        {unpinnedBots.map((bot) => (
+                          <BotRosterRow
+                            key={bot.id}
+                            bot={bot}
+                            lastMessage={lastMessageByBotId[bot.id] ?? null}
+                            isActive={selectedBotId === bot.id}
+                            onSelect={handleSelect}
+                            onOpenMenu={handleBotContextMenu}
+                          />
+                        ))}
+                      </ul>
                     </div>
                   </SortableContext>
                   {unpinnedBots.length === 0 && pinnedBots.length === 0 ? (
@@ -626,22 +895,23 @@ export default function BotRosterSidebar() {
           </>
         )}
       </SidebarContent>
-      {/* Rail new-bot sits above the footer, like the expanded header's plus. */}
+      {/* Rail add menu sits above the footer, like the expanded header's plus. */}
       <div className="hidden shrink-0 flex-col items-center pb-1 group-data-[collapsible=icon]:flex">
         <Tooltip>
           <TooltipTrigger
             render={
               <button
                 type="button"
-                aria-label="New bot"
-                onClick={handleNewBot}
+                aria-label="Add bot or group"
+                aria-haspopup="menu"
+                onClick={handleAddMenu}
                 className="flex size-9 cursor-pointer items-center justify-center rounded-lg text-sidebar-muted-foreground outline-none select-none hover:bg-sidebar-row-hover hover:text-sidebar-foreground focus-visible:ring-2 focus-visible:ring-ring"
               >
                 <PlusIcon className="size-4" />
               </button>
             }
           />
-          <TooltipPopup side="right">New bot</TooltipPopup>
+          <TooltipPopup side="right">Add</TooltipPopup>
         </Tooltip>
       </div>
       {newBotOpen ? (
@@ -649,6 +919,14 @@ export default function BotRosterSidebar() {
           open
           onOpenChange={setNewBotOpen}
           onCreate={(input) => void handleCreateBot(input)}
+        />
+      ) : null}
+      {newGroupOpen ? (
+        <NewGroupDialog
+          open
+          bots={bots}
+          onOpenChange={setNewGroupOpen}
+          onCreate={(input) => void handleCreateGroup(input)}
         />
       ) : null}
       <SidebarChromeFooter />

@@ -2,15 +2,16 @@ import { useAtomValue } from "@effect/atom-react";
 import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
+  type AtomCommandResult,
 } from "@t3tools/client-runtime/state/runtime";
 import type { EnvironmentId, McpServer } from "@t3tools/contracts";
 import { ChevronLeftIcon, ChevronRightIcon, SearchIcon } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { loadCatalog, type PluginDefinition, type PluginSkill } from "../../../../../plugins";
 import { ensureLocalApi } from "../../localApi";
 import { cn } from "../../lib/utils";
-import { closePlugins, usePluginsDialogStore } from "../../pluginsDialogStore";
-import { usePrimaryEnvironmentId } from "../../state/environments";
+import { closePlugins, openPlugins, usePluginsDialogStore } from "../../pluginsDialogStore";
+import { useEnvironmentHttpBaseUrl, usePrimaryEnvironmentId } from "../../state/environments";
 import { environmentMcpServersAtom, mcpServerEnvironment } from "../../state/mcpServers";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { Button } from "../ui/button";
@@ -30,6 +31,7 @@ import { Textarea } from "../ui/textarea";
 import { toastManager } from "../ui/toast";
 import { CustomMcpServers, PluginLogoImage, PluginsCatalog } from "./PluginsCatalog";
 import { PluginDetails } from "./PluginDetails";
+import { takeMcpOAuthReturnLocation } from "./mcpOAuthCallback";
 import {
   findPluginServer,
   isBuiltinMcpServer,
@@ -42,13 +44,14 @@ import {
   PLUGIN_FILTERS,
   type PluginFilter,
 } from "./pluginPresentation";
+import { useMcpPluginAuth } from "./useMcpPluginAuth";
 
 const CATALOG = loadCatalog();
 
 export const PLUGIN_DIALOG_CLASS_NAME = "h-[min(48rem,90dvh)] max-w-5xl flex-col overflow-hidden";
-export const PLUGIN_DIRECTORY_HEADER_CLASS_NAME =
-  "max-h-[45%] min-h-0 gap-3 overflow-y-auto overscroll-contain px-6 py-5";
-export const PLUGIN_DIRECTORY_PANEL_CLASS_NAME = "space-y-8 px-5 pt-5! pb-5 sm:px-6";
+export const PLUGIN_DIRECTORY_HEADER_CLASS_NAME = "shrink-0 gap-3 px-6 py-5";
+export const PLUGIN_DIRECTORY_PANEL_CLASS_NAME =
+  "min-w-0 w-full space-y-8 overflow-x-hidden px-5 pt-5! pb-5 sm:px-6";
 
 export interface McpServerDraft {
   readonly name: string;
@@ -117,6 +120,7 @@ function PluginsDialogForEnvironment({ environmentId }: { readonly environmentId
   const deleteServer = useAtomCommand(mcpServerEnvironment.delete, { reportFailure: false });
   const enableServer = useAtomCommand(mcpServerEnvironment.enable, { reportFailure: false });
   const disableServer = useAtomCommand(mcpServerEnvironment.disable, { reportFailure: false });
+  const environmentHttpBaseUrl = useEnvironmentHttpBaseUrl(environmentId);
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState<PluginFilter>("All");
   const [view, setView] = useState<DirectoryView>({ kind: "catalog" });
@@ -124,6 +128,7 @@ function PluginsDialogForEnvironment({ environmentId }: { readonly environmentId
   const [draft, setDraft] = useState(EMPTY_MCP_SERVER_DRAFT);
   const [submitAttempted, setSubmitAttempted] = useState(false);
   const [pendingServerId, setPendingServerId] = useState<string | null>(null);
+  const [pendingActionLabel, setPendingActionLabel] = useState<string | null>(null);
   const sections = useMemo(
     () => buildPluginSections({ plugins: CATALOG, query, filter }),
     [filter, query],
@@ -132,11 +137,31 @@ function PluginsDialogForEnvironment({ environmentId }: { readonly environmentId
   const installedPlugins = CATALOG.filter((plugin) => findPluginServer(plugin, servers)?.enabled);
   const installedSections = buildInstalledPluginSection({ plugins: installedPlugins, query });
   const validationError = validateMcpServerDraft(draft);
+  const beginPendingAction = (mcpServerId: string, label: string | null = null) => {
+    setPendingServerId(mcpServerId);
+    setPendingActionLabel(label);
+  };
 
-  const reportFailure = (
-    title: string,
-    result: Awaited<ReturnType<typeof createServer>>,
-  ): boolean => {
+  const finishPendingAction = () => {
+    setPendingServerId(null);
+    setPendingActionLabel(null);
+  };
+  const {
+    activeLoginPluginId,
+    activeLoginServerId,
+    connectionByServerId,
+    clearConnectionOverride,
+    connectPlugin,
+    cancelConnect,
+    disconnectPlugin,
+  } = useMcpPluginAuth({
+    environmentId,
+    environmentHttpBaseUrl,
+    beginPendingAction,
+    finishPendingAction,
+  });
+
+  const reportFailure = (title: string, result: AtomCommandResult<unknown, unknown>): boolean => {
     if (result._tag !== "Failure" || isAtomCommandInterrupted(result)) return false;
     const error = squashAtomCommandFailure(result);
     toastManager.add({
@@ -160,14 +185,17 @@ function PluginsDialogForEnvironment({ environmentId }: { readonly environmentId
 
   const togglePlugin = async (plugin: PluginDefinition, enabled: boolean) => {
     const plan = planPluginToggle(plugin, servers, enabled);
-    setPendingServerId(plan.mcpServerId);
+    beginPendingAction(plan.mcpServerId, enabled ? "Adding…" : "Removing…");
     if (plan.action === "refresh-and-enable") {
       const updateResult = await updateServer({
         environmentId,
         input: { mcpServerId: plan.mcpServerId, ...plan.configuration },
       });
-      if (reportFailure(`Could not update ${plugin.title}`, updateResult)) {
-        setPendingServerId(null);
+      if (
+        reportFailure(`Could not update ${plugin.title}`, updateResult) ||
+        updateResult._tag !== "Success"
+      ) {
+        finishPendingAction();
         return;
       }
     }
@@ -181,20 +209,30 @@ function PluginsDialogForEnvironment({ environmentId }: { readonly environmentId
             environmentId,
             input: { mcpServerId: plan.mcpServerId },
           });
-    setPendingServerId(null);
-    reportFailure(
-      enabled ? `Could not enable ${plugin.title}` : `Could not disable ${plugin.title}`,
-      result,
-    );
+    finishPendingAction();
+    if (
+      reportFailure(
+        enabled ? `Could not enable ${plugin.title}` : `Could not disable ${plugin.title}`,
+        result,
+      ) ||
+      result._tag !== "Success"
+    ) {
+      return;
+    }
+    if (enabled && plugin.kind === "mcp-url" && plugin.authentication === "oauth") {
+      await connectPlugin(plugin);
+    } else if (!enabled) {
+      clearConnectionOverride(String(plan.mcpServerId));
+    }
   };
 
   const toggleCustom = async (server: McpServer, enabled: boolean) => {
-    setPendingServerId(server.id);
+    beginPendingAction(server.id);
     const result = await (enabled ? enableServer : disableServer)({
       environmentId,
       input: { mcpServerId: server.id },
     });
-    setPendingServerId(null);
+    finishPendingAction();
     reportFailure(enabled ? "Could not enable MCP server" : "Could not disable MCP server", result);
   };
 
@@ -214,12 +252,12 @@ function PluginsDialogForEnvironment({ environmentId }: { readonly environmentId
               .filter(Boolean),
           }
         : { name: draft.name.trim(), transport: "url" as const, url: draft.url.trim() };
-    setPendingServerId(mcpServerId);
+    beginPendingAction(mcpServerId);
     const result = await updateServer({
       environmentId,
       input: { mcpServerId, ...configuration },
     });
-    setPendingServerId(null);
+    finishPendingAction();
     if (!reportFailure("Could not update MCP server", result)) closeEditor();
   };
 
@@ -272,9 +310,9 @@ function PluginsDialogForEnvironment({ environmentId }: { readonly environmentId
       { variant: "destructive" },
     );
     if (!confirmed) return;
-    setPendingServerId(server.id);
+    beginPendingAction(server.id);
     const result = await deleteServer({ environmentId, input: { mcpServerId: server.id } });
-    setPendingServerId(null);
+    finishPendingAction();
     reportFailure("Could not delete MCP server", result);
   };
 
@@ -284,9 +322,17 @@ function PluginsDialogForEnvironment({ environmentId }: { readonly environmentId
         <PluginDetails
           plugin={view.plugin}
           installed={findPluginServer(view.plugin, servers)?.enabled ?? false}
+          connection={connectionByServerId.get(String(pluginMcpServerId(view.plugin)))}
           pending={pendingServerId === pluginMcpServerId(view.plugin)}
+          pendingActionLabel={
+            pendingServerId === pluginMcpServerId(view.plugin) ? pendingActionLabel : null
+          }
+          activeLogin={activeLoginPluginId === view.plugin.id}
           onBack={() => setView({ kind: view.back })}
           onToggle={(enabled) => void togglePlugin(view.plugin, enabled)}
+          onConnect={() => void connectPlugin(view.plugin)}
+          onCancelConnect={() => void cancelConnect()}
+          onDisconnect={() => void disconnectPlugin(view.plugin)}
           onCopySource={() => void copyPluginSource(view.plugin)}
           onViewSource={() => viewPluginSource(view.plugin)}
           onOpenSkill={openPluginSkill}
@@ -299,27 +345,30 @@ function PluginsDialogForEnvironment({ environmentId }: { readonly environmentId
                 <DialogTitle>Plugins</DialogTitle>
                 {view.kind === "catalog" ? (
                   <button
-                    className="group -ms-2 mt-2 flex min-h-11 cursor-pointer items-center gap-2.5 rounded-xl px-2 py-1.5 text-start outline-hidden transition-colors hover:bg-muted/50 focus-visible:ring-2 focus-visible:ring-ring"
+                    className="group -ms-1.5 mt-1.5 flex min-h-8 cursor-pointer items-center gap-2 rounded-lg px-1.5 py-1 text-start outline-hidden transition-colors hover:bg-muted/50 focus-visible:ring-2 focus-visible:ring-ring"
                     type="button"
                     onClick={openInstalled}
                   >
                     {installedPlugins.length > 0 ? (
-                      <span className="flex -space-x-2" aria-hidden="true">
+                      <span className="flex -space-x-1.5" aria-hidden="true">
                         {installedPlugins.slice(0, 3).map((plugin) => (
-                          <PluginLogoImage className="size-9" key={plugin.id} plugin={plugin} />
+                          <PluginLogoImage
+                            className="size-6 rounded-md p-1 ring-2 ring-popover"
+                            key={plugin.id}
+                            plugin={plugin}
+                          />
                         ))}
                       </span>
                     ) : null}
-                    <span className="min-w-0">
-                      <span className="block text-sm font-medium text-foreground">
+                    <span className="truncate text-sm text-muted-foreground">
+                      <span className="font-medium text-foreground">
                         {installedPlugins.length} installed
                       </span>
-                      <span className="block text-xs text-muted-foreground">
-                        {customServers.length} custom{" "}
-                        {customServers.length === 1 ? "server" : "servers"}
-                      </span>
+                      {" · "}
+                      {customServers.length} custom{" "}
+                      {customServers.length === 1 ? "server" : "servers"}
                     </span>
-                    <ChevronRightIcon className="size-4 text-muted-foreground transition-transform group-hover:translate-x-0.5 group-hover:text-foreground" />
+                    <ChevronRightIcon className="size-4 shrink-0 text-muted-foreground transition-transform group-hover:translate-x-0.5 group-hover:text-foreground" />
                   </button>
                 ) : (
                   <Button className="mt-3 -ms-2" size="sm" variant="ghost" onClick={openCatalog}>
@@ -350,10 +399,10 @@ function PluginsDialogForEnvironment({ environmentId }: { readonly environmentId
                   <button
                     aria-pressed={filter === item}
                     className={cn(
-                      "cursor-pointer rounded-md border px-2.5 py-1 text-xs outline-hidden transition-colors focus-visible:ring-2 focus-visible:ring-ring",
+                      "cursor-pointer rounded-full px-3 py-1 text-xs outline-hidden transition-colors focus-visible:ring-2 focus-visible:ring-ring",
                       filter === item
-                        ? "border-transparent bg-accent text-accent-foreground"
-                        : "border-border/70 text-muted-foreground hover:bg-muted/60 hover:text-foreground",
+                        ? "bg-accent font-medium text-accent-foreground"
+                        : "bg-muted/50 text-muted-foreground hover:bg-muted hover:text-foreground",
                     )}
                     key={item}
                     type="button"
@@ -370,7 +419,12 @@ function PluginsDialogForEnvironment({ environmentId }: { readonly environmentId
               sections={view.kind === "installed" ? installedSections : sections}
               servers={servers}
               pendingServerId={pendingServerId}
+              pendingActionLabel={pendingActionLabel}
+              activeLoginServerId={activeLoginServerId}
+              connectionByServerId={connectionByServerId}
               onToggle={(plugin, enabled) => void togglePlugin(plugin, enabled)}
+              onConnect={(plugin) => void connectPlugin(plugin)}
+              onCancelConnect={() => void cancelConnect()}
               onOpen={openPlugin}
               onViewAll={setFilter}
             />
@@ -470,11 +524,14 @@ function PluginsDialogForEnvironment({ environmentId }: { readonly environmentId
 export function PluginsDialog() {
   const open = usePluginsDialogStore((state) => state.open);
   const environmentId = usePrimaryEnvironmentId();
+  useEffect(() => {
+    if (takeMcpOAuthReturnLocation(window.location.origin)) openPlugins();
+  }, []);
   return (
     <Dialog open={open} onOpenChange={(nextOpen) => !nextOpen && closePlugins()}>
       <DialogPopup bottomStickOnMobile={false} className={PLUGIN_DIALOG_CLASS_NAME}>
         {environmentId ? (
-          <PluginsDialogForEnvironment environmentId={environmentId} />
+          <PluginsDialogForEnvironment key={environmentId} environmentId={environmentId} />
         ) : (
           <DialogHeader>
             <DialogTitle>Plugins</DialogTitle>

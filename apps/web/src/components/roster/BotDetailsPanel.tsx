@@ -16,6 +16,7 @@ import { useEffect, useMemo, useReducer, useState, type ReactNode } from "react"
 
 import { usePrimarySettings } from "../../hooks/useSettings";
 import { resolveShortcutCommand, shortcutLabelForCommand } from "../../keybindings";
+import { cn } from "../../lib/utils";
 import { RIGHT_PANEL_INLINE_LAYOUT_MEDIA_QUERY } from "../../rightPanelLayout";
 import {
   getCustomModelOptionsByInstance,
@@ -39,6 +40,7 @@ import { Sheet, SheetClose, SheetPopup, SheetTitle } from "../ui/sheet";
 import { Textarea } from "../ui/textarea";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { AvatarPickerDialog } from "./AvatarPickerDialog";
+import { subscribeToBotDetailsPanelOpen } from "./botDetailsPanelEvents";
 import { BotAvatarView } from "./BotAvatarView";
 import { BotModelPicker } from "./BotModelPicker";
 import {
@@ -60,6 +62,7 @@ type BotDetailsPanelState = {
 type BotDetailsPanelAction =
   | { readonly type: "toggle-desktop" }
   | { readonly type: "toggle-mobile" }
+  | { readonly type: "set-desktop"; readonly open: boolean }
   | { readonly type: "set-mobile"; readonly open: boolean };
 
 export function reduceBotDetailsPanelState(
@@ -72,6 +75,9 @@ export function reduceBotDetailsPanelState(
   if (action.type === "toggle-mobile") {
     return { ...state, mobileOpen: !state.mobileOpen };
   }
+  if (action.type === "set-desktop") {
+    return { ...state, desktopOpen: action.open };
+  }
   return { ...state, mobileOpen: action.open };
 }
 
@@ -81,6 +87,7 @@ export interface BotProfileUpdate {
   readonly description: string | null;
   readonly engine: BotEngine | null;
   readonly sandbox: Bot["sandbox"];
+  readonly usageCap: Bot["usageCap"];
   readonly disabledMcpServerIds: readonly McpServerId[];
 }
 
@@ -104,6 +111,7 @@ function BotProfileEditor({
   const [engineChanged, setEngineChanged] = useState(false);
   const [toolsOpen, setToolsOpen] = useState(false);
   const [sandbox, setSandbox] = useState<BotSandboxChoice>(() => botSandboxChoice(bot.sandbox));
+  const [usageCap, setUsageCap] = useState(() => (bot.usageCap ? String(bot.usageCap.limit) : ""));
   const [disabledMcpServerIds, setDisabledMcpServerIds] = useState<readonly McpServerId[]>(
     bot.disabledMcpServerIds,
   );
@@ -148,6 +156,14 @@ function BotProfileEditor({
   const normalizedDescription = description.trim() || null;
   const nextEngine: Bot["engine"] = engineChanged && model ? { provider, model } : bot.engine;
   const nextSandbox: Bot["sandbox"] = sandbox;
+  const trimmedUsageCap = usageCap.trim();
+  const usageCapValid =
+    trimmedUsageCap === "" ||
+    (/^\d+$/u.test(trimmedUsageCap) && Number.parseInt(trimmedUsageCap, 10) > 0);
+  const nextUsageCap: Bot["usageCap"] =
+    usageCapValid && trimmedUsageCap !== ""
+      ? { unit: "tokens", limit: Number.parseInt(trimmedUsageCap, 10) }
+      : null;
   const tools = useMemo(() => buildBotToolItems(mcpServers), [mcpServers]);
   const enabledToolCount = tools.filter(
     (tool) => tool.workspaceEnabled && !disabledMcpServerIds.includes(tool.id),
@@ -156,12 +172,14 @@ function BotProfileEditor({
     [...disabledMcpServerIds].sort().join("\u0000") !==
     [...bot.disabledMcpServerIds].sort().join("\u0000");
   const sandboxDirty = sandbox !== botSandboxChoice(bot.sandbox);
+  const usageCapDirty = nextUsageCap?.limit !== bot.usageCap?.limit;
   const dirty =
     name.trim() !== bot.name ||
     normalizedLabel !== bot.label ||
     normalizedDescription !== bot.description ||
     engineChanged ||
     sandboxDirty ||
+    usageCapDirty ||
     toolOverridesDirty;
 
   const markChanged = () => setSaved(false);
@@ -271,11 +289,28 @@ function BotProfileEditor({
           </Select>
         </div>
 
+        <label className="block space-y-2 text-sm font-medium">
+          <span>
+            Token cap <span className="font-normal text-muted-foreground">(optional)</span>
+          </span>
+          <Input
+            aria-label="Bot token cap"
+            inputMode="numeric"
+            min={1}
+            type="number"
+            value={usageCap}
+            onChange={(event) => {
+              setUsageCap(event.currentTarget.value);
+              markChanged();
+            }}
+          />
+        </label>
+
         <div className="space-y-2">
-          <div className="text-sm font-medium">Tools</div>
+          <div className="text-sm font-medium">Plugins</div>
           <button
             type="button"
-            aria-label="Manage bot tools"
+            aria-label="Manage bot plugins"
             aria-expanded={toolsOpen}
             onClick={() => setToolsOpen(true)}
             className="flex min-h-10 w-full items-center gap-3 rounded-lg border border-border bg-muted/20 px-3 text-left outline-none transition-colors hover:bg-muted/40 focus-visible:ring-2 focus-visible:ring-ring"
@@ -283,7 +318,7 @@ function BotProfileEditor({
             <AppIcon className="size-4 shrink-0 text-muted-foreground" icon={WrenchIcon} />
             <span className="min-w-0 flex-1 text-sm">
               {tools.length === 0
-                ? "No workspace tools"
+                ? "No plugins installed"
                 : `${enabledToolCount} of ${tools.length} enabled`}
             </span>
             <span className="text-xs text-muted-foreground">Manage</span>
@@ -295,7 +330,7 @@ function BotProfileEditor({
         {saved ? <span className="mr-auto text-xs text-success">Saved</span> : null}
         <Button
           size="sm"
-          disabled={saving || !dirty || !name.trim() || !onSave}
+          disabled={saving || !dirty || !name.trim() || !usageCapValid || !onSave}
           onClick={() => {
             if (!onSave) return;
             setSaving(true);
@@ -305,6 +340,7 @@ function BotProfileEditor({
               description: normalizedDescription,
               engine: nextEngine,
               sandbox: nextSandbox,
+              usageCap: nextUsageCap,
               disabledMcpServerIds,
             }).then((success) => {
               setSaving(false);
@@ -346,6 +382,18 @@ export function BotDetailsPanel({
   });
   const shortcutLabel = shortcutLabelForCommand(keybindings, "rightPanel.toggle");
 
+  useEffect(
+    () =>
+      subscribeToBotDetailsPanelOpen(bot.id, () => {
+        dispatchPanel(
+          window.matchMedia(RIGHT_PANEL_INLINE_LAYOUT_MEDIA_QUERY).matches
+            ? { type: "set-mobile", open: true }
+            : { type: "set-desktop", open: true },
+        );
+      }),
+    [bot.id],
+  );
+
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.defaultPrevented || event.repeat) return;
@@ -385,33 +433,41 @@ export function BotDetailsPanel({
       <aside
         aria-hidden={!panelState.desktopOpen}
         aria-label={`${bot.name} bot sidebar`}
+        data-state={panelState.desktopOpen ? "expanded" : "collapsed"}
         data-testid="bot-details-panel"
-        className={
-          panelState.desktopOpen
-            ? "hidden h-full w-88 shrink-0 flex-col border-l border-border bg-background min-[981px]:flex"
-            : "hidden"
-        }
-      >
-        {content(
-          <Tooltip>
-            <TooltipTrigger
-              render={
-                <Button
-                  aria-expanded="true"
-                  aria-label={`Collapse ${bot.name} bot sidebar`}
-                  size="icon-sm"
-                  variant="ghost"
-                  onClick={() => dispatchPanel({ type: "toggle-desktop" })}
-                >
-                  <AppIcon icon={PanelRightCloseIcon} />
-                </Button>
-              }
-            />
-            <TooltipPopup side="left">
-              Collapse{shortcutLabel ? ` (${shortcutLabel})` : ""}
-            </TooltipPopup>
-          </Tooltip>,
+        className={cn(
+          "relative hidden h-full shrink-0 overflow-hidden min-[981px]:block",
+          "transition-[width] duration-[320ms] ease-[cubic-bezier(0.22,1.18,0.36,1)] motion-reduce:transition-none",
+          panelState.desktopOpen ? "w-88" : "w-0",
         )}
+      >
+        <div
+          className={cn(
+            "absolute inset-y-0 right-0 flex w-88 flex-col border-l border-border bg-background",
+            !panelState.desktopOpen && "pointer-events-none",
+          )}
+        >
+          {content(
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <Button
+                    aria-expanded={panelState.desktopOpen}
+                    aria-label={`Collapse ${bot.name} bot sidebar`}
+                    size="icon-sm"
+                    variant="ghost"
+                    onClick={() => dispatchPanel({ type: "toggle-desktop" })}
+                  >
+                    <AppIcon icon={PanelRightCloseIcon} />
+                  </Button>
+                }
+              />
+              <TooltipPopup side="left">
+                Collapse{shortcutLabel ? ` (${shortcutLabel})` : ""}
+              </TooltipPopup>
+            </Tooltip>,
+          )}
+        </div>
       </aside>
       {!panelState.desktopOpen ? (
         <div className="fixed right-[var(--workspace-controls-right)] top-[var(--workspace-controls-top)] z-40 hidden h-[var(--workspace-topbar-height)] items-center min-[981px]:flex">

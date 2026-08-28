@@ -37,11 +37,17 @@ describe("BotDetailsPanel", () => {
     expect(markup).toContain("Connect a provider");
     expect(markup).toContain(">Sandbox</div>");
     expect(markup).toContain('aria-label="Sandbox provider"');
-    expect(markup).toContain(">Tools</div>");
-    expect(markup).toContain("No workspace tools");
+    expect(markup).toContain('aria-label="Bot token cap"');
+    expect(markup).toContain(">Plugins</div>");
+    expect(markup).toContain("No plugins installed");
     expect(markup).toContain(">Manage</span>");
     expect(markup).toContain('aria-label="Collapse Akeru bot sidebar"');
     expect(markup).toContain('aria-label="Open Akeru bot sidebar"');
+    expect(markup).toContain('data-state="expanded"');
+    expect(markup).toContain("duration-[320ms]");
+    expect(markup).toContain("ease-[cubic-bezier(0.22,1.18,0.36,1)]");
+    expect(markup).toContain("motion-reduce:transition-none");
+    expect(markup).toContain("absolute inset-y-0 right-0 flex w-88");
     expect(markup).not.toContain("Routines");
     expect(markup).not.toContain("mock data");
     expect(markup).not.toContain("border-b border-border");
@@ -82,6 +88,25 @@ describe("BotDetailsPanel", () => {
     });
   });
 
+  it("opens desktop idempotently without changing the mobile sheet", () => {
+    const open = { desktopOpen: true, mobileOpen: false };
+    expect(reduceBotDetailsPanelState(open, { type: "set-desktop", open: true })).toEqual(open);
+    expect(
+      reduceBotDetailsPanelState(
+        { desktopOpen: false, mobileOpen: false },
+        { type: "set-desktop", open: true },
+      ),
+    ).toEqual({ desktopOpen: true, mobileOpen: false });
+  });
+
+  it("exposes a responsive open request for roster profile actions", () => {
+    const source = NodeFS.readFileSync(new URL("./BotDetailsPanel.tsx", import.meta.url), "utf8");
+
+    expect(source).toContain("subscribeToBotDetailsPanelOpen");
+    expect(source).toContain('{ type: "set-desktop", open: true }');
+    expect(source).toContain('{ type: "set-mobile", open: true }');
+  });
+
   it("sets the mobile sheet state without changing desktop", () => {
     expect(
       reduceBotDetailsPanelState(
@@ -98,8 +123,8 @@ describe("BotDetailsPanel", () => {
     );
     expect(source).toContain("<BotDetailsPanel");
     expect(source).toContain("onSaveBot=");
-    expect(source).toContain("label, description, engine, sandbox, disabledMcpServerIds");
     expect(source).toContain("sandbox,");
+    expect(source).toContain("usageCap,");
     expect(source).toContain("disabledMcpServerIds,");
     expect(source).not.toContain("RightPanelTabs");
     expect(source).not.toContain("ThreadTerminalDrawer");

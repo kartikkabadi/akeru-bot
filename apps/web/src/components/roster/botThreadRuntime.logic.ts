@@ -118,6 +118,47 @@ export function findLatestBotThreadTarget(
   return latest ? { environmentId: latest.environmentId, threadId: latest.id } : null;
 }
 
+/**
+ * Latest durable thread for one group member. Fan-out gives each member its
+ * own thread inside the group, keyed by the thread's respondingBotId. Older
+ * single-thread groups map their mixed thread to whichever member answered
+ * last, so history stays reachable.
+ */
+export function findLatestGroupMemberThreadTarget(
+  groupId: string,
+  botId: string,
+  environmentId: string,
+  threads: readonly {
+    environmentId: string;
+    id: string;
+    groupId?: string | null | undefined;
+    respondingBotId?: string | null | undefined;
+    updatedAt: string;
+    archivedAt: string | null;
+    deletedAt?: string | null | undefined;
+  }[],
+  options?: { readonly adoptUnrouted?: boolean },
+): { environmentId: string; threadId: string } | null {
+  const candidates = threads.filter(
+    (thread) =>
+      thread.environmentId === environmentId &&
+      thread.groupId === groupId &&
+      thread.archivedAt === null &&
+      thread.deletedAt == null,
+  );
+  const latest = candidates
+    .filter(
+      (thread) =>
+        thread.respondingBotId === botId ||
+        (options?.adoptUnrouted === true && thread.respondingBotId == null),
+    )
+    .toSorted(
+      (left, right) =>
+        right.updatedAt.localeCompare(left.updatedAt) || right.id.localeCompare(left.id),
+    )[0];
+  return latest ? { environmentId: latest.environmentId, threadId: latest.id } : null;
+}
+
 export function findLatestGroupThreadTarget(
   groupId: string,
   environmentId: string,

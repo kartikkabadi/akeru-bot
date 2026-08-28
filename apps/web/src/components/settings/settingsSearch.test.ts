@@ -84,10 +84,20 @@ describe("searchSettings", () => {
       id: "word-wrap",
       to: "/settings/appearance",
     });
-    expect(searchSettings("environment identification")[0]).toMatchObject({
-      id: "environment-identification",
+    expect(searchSettings("contrast")[0]).toMatchObject({
+      id: "setting-appearance-contrast",
       to: "/settings/appearance",
-      targetId: "appearance",
     });
+  });
+
+  it("omits retired coding-agent settings from the catalog", () => {
+    const ids = SETTINGS_SEARCH_ITEMS.map((item) => item.id);
+    expect(ids).not.toContain("project-grouping");
+    expect(ids).not.toContain("auto-settle-merged-threads");
+    expect(ids).not.toContain("hide-whitespace-changes");
+    expect(ids).not.toContain("skills-in-slash-menu");
+    expect(ids).not.toContain("terminal-font");
+    expect(ids).not.toContain("environment-identification");
+    expect(ids).not.toContain("legacy-plan-mode");
   });
 });

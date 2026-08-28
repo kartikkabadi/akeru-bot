@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "vite-plus/test";
 
-import { clearBotDraft, readBotDraft, writeBotDraft } from "./botDraftStore";
+import { clearBotDraft, readBotDraft, readBotDraftRevision, writeBotDraft } from "./botDraftStore";
 
 const memory = new Map<string, string>();
 
@@ -42,5 +42,12 @@ describe("botDraftStore", () => {
     writeBotDraft("bot-2", "two");
     clearBotDraft("bot-1");
     expect(readBotDraft("bot-2")).toBe("two");
+  });
+
+  it("increments a per-bot revision for every write", () => {
+    const before = readBotDraftRevision("bot-revision");
+    writeBotDraft("bot-revision", "same");
+    writeBotDraft("bot-revision", "same");
+    expect(readBotDraftRevision("bot-revision")).toBe(before + 2);
   });
 });

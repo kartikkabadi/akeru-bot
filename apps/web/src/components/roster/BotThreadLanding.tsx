@@ -1,46 +1,41 @@
 import { useAtomValue } from "@effect/atom-react";
-import { BotId, type BotEngine } from "@t3tools/contracts";
 import { useNavigate } from "@tanstack/react-router";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo } from "react";
 
 import { usePrimarySettings } from "../../hooks/useSettings";
-import {
-  getCustomModelOptionsByInstance,
-  resolveAppModelSelectionState,
-} from "../../modelSelection";
+import { resolveAppModelSelectionState } from "../../modelSelection";
 import {
   applyProviderInstanceSettings,
   deriveProviderInstanceEntries,
   sortProviderInstanceEntries,
 } from "../../providerInstances";
-import { botEnvironment } from "../../state/bots";
-import { usePrimaryEnvironmentId } from "../../state/environments";
 import { primaryServerProvidersAtom } from "../../state/server";
-import { useAtomCommand } from "../../state/use-atom-command";
+import { useThreadActivities, useThreadShell } from "../../state/entities";
 import { SidebarInset } from "../ui/sidebar";
-import { toastManager } from "../ui/toast";
 import ChatMarkdown from "../ChatMarkdown";
 import { WorkspacePageHeader } from "../WorkspacePageHeader";
 import { BotActivityStatus } from "./BotActivityStatus";
 import { BotAvatarView } from "./BotAvatarView";
+import { BotChoicePrompt } from "./BotChoicePrompt";
 import { BotConversationScrollArea } from "./BotConversationScrollArea";
-import { visibleBotChatMessages } from "./botConversationPresentation";
+import {
+  botAwaitsReply,
+  latestTurnFailureDetail,
+  visibleBotChatMessages,
+} from "./botConversationPresentation";
 import { resolveStickyBotEngine } from "./botEngineSelection";
 import { BotPromptComposer } from "./BotPromptComposer";
 import { useBotPresence } from "./botPresence";
 import { useRosterStore } from "./rosterStore";
 import { useBotThreadRuntime } from "./useBotThreadRuntime";
+import { useRosterPendingUserInput } from "./useRosterPendingUserInput";
 
 export function BotThreadLanding({ botId }: { readonly botId: string }) {
   const navigate = useNavigate();
-  const environmentId = usePrimaryEnvironmentId();
   const settings = usePrimarySettings();
   const providers = useAtomValue(primaryServerProvidersAtom);
-  const updateBot = useAtomCommand(botEnvironment.update, { reportFailure: false });
   const bot = useRosterStore((state) => state.bots.find((candidate) => candidate.id === botId));
-  const [pendingEngine, setPendingEngine] = useState<BotEngine | null>(null);
-  const [modelUpdatePending, setModelUpdatePending] = useState(false);
-  const configuredEngine = pendingEngine ?? bot?.engine ?? null;
+  const configuredEngine = bot?.engine ?? null;
   const instanceEntries = useMemo(
     () =>
       sortProviderInstanceEntries(
@@ -63,28 +58,13 @@ export function BotThreadLanding({ botId }: { readonly botId: string }) {
       }),
     [configuredEngine, defaultSelection, instanceEntries, providers, settings],
   );
-  const activeEntry = useMemo(
-    () => instanceEntries.find((entry) => entry.instanceId === stickyEngine?.instanceId) ?? null,
-    [instanceEntries, stickyEngine?.instanceId],
-  );
-  const activeModel = stickyEngine?.model ?? null;
-  const modelOptionsByInstance = useMemo(
-    () => getCustomModelOptionsByInstance(settings, providers),
-    [providers, settings],
-  );
   const effectiveModelSelection = stickyEngine;
   const runtime = useBotThreadRuntime(botId, effectiveModelSelection);
+  const pendingInput = useRosterPendingUserInput(runtime.linkedThreadRef);
+  const pendingUserInput = pendingInput.pendingUserInput;
   const presence = useBotPresence(botId);
-
-  useEffect(() => {
-    if (
-      pendingEngine &&
-      bot?.engine?.provider === pendingEngine.provider &&
-      bot.engine.model === pendingEngine.model
-    ) {
-      setPendingEngine(null);
-    }
-  }, [bot?.engine, pendingEngine]);
+  const threadShell = useThreadShell(runtime.linkedThreadRef);
+  const threadActivities = useThreadActivities(runtime.linkedThreadRef);
 
   useEffect(() => {
     if (!bot || bot.archivedAt !== null) {
@@ -95,8 +75,26 @@ export function BotThreadLanding({ botId }: { readonly botId: string }) {
   }, [bot, navigate]);
 
   if (!bot || bot.archivedAt !== null) return null;
-  const working = runtime.sending || presence === "working";
+  // The shimmer holds from send until the answer lands: an unanswered user
+  // message keeps the bot working even while provider session states churn.
+  const turnFailed =
+    threadShell?.session?.status === "error" ||
+    threadShell?.latestTurn?.state === "error" ||
+    threadShell?.latestTurn?.state === "interrupted";
+  const lastUserMessage = runtime.messages.findLast((message) => message.role === "user");
+  const turnFailure = turnFailed
+    ? latestTurnFailureDetail(threadActivities, lastUserMessage?.createdAt ?? null)
+    : null;
+  // Only a rendered choice card replaces the shimmer. Presence "needs-you"
+  // is not trusted here: a stale pending-input flag from a dead turn must not
+  // hide the working state while the bot owes an answer.
+  const working =
+    runtime.sending ||
+    presence === "working" ||
+    (pendingUserInput === null && botAwaitsReply(runtime.messages, { turnFailed }));
   const messages = visibleBotChatMessages(runtime.messages, working);
+  const latestMessage = messages.at(-1);
+  const followRevision = latestMessage?.role === "user" ? latestMessage.id : null;
 
   return (
     <SidebarInset
@@ -112,7 +110,7 @@ export function BotThreadLanding({ botId }: { readonly botId: string }) {
               <span className="truncate text-sm font-medium">{bot.name}</span>
             </div>
           </WorkspacePageHeader>
-          <BotConversationScrollArea>
+          <BotConversationScrollArea followRevision={followRevision}>
             {messages.length === 0 ? (
               <div className="flex flex-1 flex-col items-center justify-center gap-3 py-12">
                 <BotAvatarView avatar={bot.avatar} name={bot.name} className="size-14" />
@@ -121,25 +119,13 @@ export function BotThreadLanding({ botId }: { readonly botId: string }) {
             ) : (
               messages.map((message) =>
                 message.role === "assistant" ? (
-                  <div
-                    key={message.id}
-                    className="flex items-start gap-3"
-                    data-testid="bot-provider-message"
-                  >
-                    <BotAvatarView
-                      avatar={bot.avatar}
-                      name={bot.name}
-                      className="mt-0.5 size-7 shrink-0"
+                  <div key={message.id} data-testid="bot-provider-message">
+                    <ChatMarkdown
+                      className="max-w-[85%]"
+                      cwd={runtime.defaultProject?.workspaceRoot}
+                      text={message.text}
+                      threadRef={runtime.linkedThreadRef ?? undefined}
                     />
-                    <div className="min-w-0 max-w-[85%]">
-                      <div className="text-sm font-medium">{bot.name}</div>
-                      <ChatMarkdown
-                        className="mt-1"
-                        cwd={runtime.defaultProject?.workspaceRoot}
-                        text={message.text}
-                        threadRef={runtime.linkedThreadRef ?? undefined}
-                      />
-                    </div>
                   </div>
                 ) : (
                   <div key={message.id} className="flex justify-end" data-testid="bot-user-message">
@@ -162,55 +148,36 @@ export function BotThreadLanding({ botId }: { readonly botId: string }) {
                 ),
               )
             )}
+            {pendingUserInput ? (
+              <BotChoicePrompt
+                prompt={pendingUserInput}
+                responding={pendingInput.responding}
+                error={pendingInput.responseError}
+                onAnswer={(answers) => pendingInput.respond(pendingUserInput.requestId, answers)}
+              />
+            ) : null}
             {working ? <BotActivityStatus avatar={bot.avatar} name={bot.name} /> : null}
-            {runtime.error ? (
+            {runtime.error || turnFailure ? (
               <div
                 role="alert"
                 data-testid="bot-chat-error"
                 className="rounded-lg border border-destructive/30 bg-destructive/8 px-3 py-2 text-sm text-destructive"
               >
-                {runtime.error}
+                {runtime.error ?? turnFailure}
               </div>
             ) : null}
           </BotConversationScrollArea>
           <BotPromptComposer
+            key={bot.id}
             botName={bot.name}
             draftKey={bot.id}
             disabled={
               runtime.sending ||
-              modelUpdatePending ||
+              pendingUserInput !== null ||
               effectiveModelSelection === null ||
               !runtime.botReady ||
               !runtime.bootstrapped ||
               runtime.defaultProject === null
-            }
-            modelPicker={
-              environmentId && activeEntry && activeModel
-                ? {
-                    activeInstanceId: activeEntry.instanceId,
-                    model: activeModel,
-                    instanceEntries,
-                    modelOptionsByInstance,
-                    onChange: (instanceId, model) => {
-                      const nextEngine = { provider: instanceId, model };
-                      setPendingEngine(nextEngine);
-                      setModelUpdatePending(true);
-                      void updateBot({
-                        environmentId,
-                        input: {
-                          botId: BotId.make(bot.id),
-                          engine: nextEngine,
-                        },
-                      }).then((result) => {
-                        setModelUpdatePending(false);
-                        if (result._tag === "Failure") {
-                          setPendingEngine(null);
-                          toastManager.add({ type: "error", title: "Could not change model" });
-                        }
-                      });
-                    },
-                  }
-                : null
             }
             onSubmit={runtime.send}
           />
@@ -218,8 +185,6 @@ export function BotThreadLanding({ botId }: { readonly botId: string }) {
             <p className="px-4 pb-3 text-center text-xs text-muted-foreground">
               Enable a provider before you message this bot.
             </p>
-          ) : modelUpdatePending ? (
-            <p className="px-4 pb-3 text-center text-xs text-muted-foreground">Changing model…</p>
           ) : !runtime.botReady ? (
             <p className="px-4 pb-3 text-center text-xs text-muted-foreground">Connecting bot…</p>
           ) : runtime.bootstrapped && runtime.defaultProject === null ? (

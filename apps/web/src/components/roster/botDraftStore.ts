@@ -1,5 +1,6 @@
 const DRAFTS_KEY = "akeru:bot-drafts:v1";
 const MAX_DRAFT_CHARS = 20_000;
+const revisions = new Map<string, number>();
 
 function storage(): Storage | null {
   try {
@@ -41,7 +42,12 @@ export function readBotDraft(draftKey: string): string {
   return readAll()[draftKey] ?? "";
 }
 
+export function readBotDraftRevision(draftKey: string): number {
+  return revisions.get(draftKey) ?? 0;
+}
+
 export function writeBotDraft(draftKey: string, text: string): void {
+  revisions.set(draftKey, readBotDraftRevision(draftKey) + 1);
   const drafts = readAll();
   const clipped = text.slice(0, MAX_DRAFT_CHARS);
   if (clipped.length === 0) {

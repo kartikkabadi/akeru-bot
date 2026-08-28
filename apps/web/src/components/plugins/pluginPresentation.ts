@@ -8,11 +8,15 @@ export type PluginFilter = "All" | "Featured" | PluginCategory;
 
 export const PLUGIN_FILTERS: readonly PluginFilter[] = ["All", "Featured", ...PLUGIN_CATEGORIES];
 
+/** Featured entries shown as cards on the All view before View all. */
+const FEATURED_PREVIEW_COUNT = 4;
+
 export interface PluginSection {
   readonly title: string;
   readonly filter: PluginFilter;
   readonly plugins: readonly PluginDefinition[];
   readonly showViewAll: boolean;
+  readonly layout: "cards" | "rows";
 }
 
 export function buildInstalledPluginSection(input: {
@@ -25,7 +29,7 @@ export function buildInstalledPluginSection(input: {
       .toLocaleLowerCase()
       .includes(query),
   );
-  return [{ title: "Installed", filter: "All", plugins, showViewAll: false }];
+  return [{ title: "Installed", filter: "All", plugins, showViewAll: false, layout: "rows" }];
 }
 
 export function buildPluginSections(input: {
@@ -50,7 +54,13 @@ export function buildPluginSections(input: {
               : plugin.category === input.filter,
           );
     return [
-      { title: "Search results", filter: input.filter, plugins: filtered, showViewAll: false },
+      {
+        title: "Search results",
+        filter: input.filter,
+        plugins: filtered,
+        showViewAll: false,
+        layout: "rows",
+      },
     ];
   }
 
@@ -61,6 +71,7 @@ export function buildPluginSections(input: {
         filter: "Featured",
         plugins: matching.filter((plugin) => plugin.featured === true),
         showViewAll: false,
+        layout: "cards",
       },
     ];
   }
@@ -72,22 +83,31 @@ export function buildPluginSections(input: {
         filter: input.filter,
         plugins: matching.filter((plugin) => plugin.category === input.filter),
         showViewAll: false,
+        layout: "rows",
       },
     ];
   }
 
+  const featured = matching.filter((plugin) => plugin.featured === true);
   const sections: PluginSection[] = [
     {
       title: "Featured",
       filter: "Featured",
-      plugins: matching.filter((plugin) => plugin.featured === true),
-      showViewAll: true,
+      plugins: featured.slice(0, FEATURED_PREVIEW_COUNT),
+      showViewAll: featured.length > FEATURED_PREVIEW_COUNT,
+      layout: "cards",
     },
   ];
   for (const category of PLUGIN_CATEGORIES) {
     const plugins = matching.filter((plugin) => plugin.category === category);
     if (plugins.length > 0) {
-      sections.push({ title: category, filter: category, plugins, showViewAll: true });
+      sections.push({
+        title: category,
+        filter: category,
+        plugins,
+        showViewAll: true,
+        layout: "rows",
+      });
     }
   }
   return sections;

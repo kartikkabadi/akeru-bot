@@ -58,6 +58,7 @@ import {
   buildKeybindingCommandOptions,
   buildWhenVariableOptions,
   commandLabel,
+  isProductKeybindingCommand,
   DEFAULT_WHEN_VARIABLE,
   isKnownWhenVariable,
   keybindingConflictLabels,
@@ -1068,7 +1069,13 @@ export function KeybindingsSettingsPanel() {
   const searchInputRef = useRef<HTMLInputElement>(null);
   const [savingCommand, setSavingCommand] = useState<KeybindingCommand | null>(null);
   const [isAddingBinding, setIsAddingBinding] = useState(false);
-  const rows = useMemo(() => buildKeybindingRows(keybindings, query), [keybindings, query]);
+  const rows = useMemo(
+    () =>
+      buildKeybindingRows(keybindings, query).filter((row) =>
+        isProductKeybindingCommand(row.command),
+      ),
+    [keybindings, query],
+  );
   const commandOptions = useMemo(() => buildKeybindingCommandOptions(keybindings), [keybindings]);
   const whenVariables = useMemo(() => buildWhenVariableOptions(), []);
 

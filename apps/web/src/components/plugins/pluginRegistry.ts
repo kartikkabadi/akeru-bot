@@ -21,7 +21,12 @@ export function findPluginServer(
 
 export function pluginMcpConfiguration(plugin: PluginDefinition): McpServerConfiguration {
   if (plugin.kind === "mcp-url") {
-    return { name: plugin.title, transport: "url", url: plugin.url };
+    return {
+      name: plugin.title,
+      transport: "url",
+      url: plugin.url,
+      authentication: plugin.authentication,
+    };
   }
   return {
     name: plugin.title,

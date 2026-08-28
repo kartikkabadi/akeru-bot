@@ -185,32 +185,32 @@ export function BotToolsSheet({
     <div className="fixed inset-0 z-[70] flex justify-end" role="presentation">
       <button
         type="button"
-        aria-label="Close bot tools"
+        aria-label="Close bot plugins"
         className="absolute inset-0 bg-background/60 backdrop-blur-xs"
         onClick={() => onOpenChange(false)}
       />
       <section
         role="dialog"
         aria-modal="true"
-        aria-labelledby="bot-tools-title"
+        aria-labelledby="bot-plugins-title"
         className="pb-safe pt-safe relative flex h-full w-[min(92vw,30rem)] min-h-0 flex-col border-s border-border bg-popover text-popover-foreground shadow-xl"
       >
         <header className="border-b border-border px-5 pb-4 pt-5">
           <div className="flex items-center justify-between gap-3">
-            <h2 id="bot-tools-title" className="text-base font-semibold">
-              Tools
+            <h2 id="bot-plugins-title" className="text-base font-semibold">
+              Plugins
             </h2>
             <Button
               size="icon-sm"
               variant="ghost"
-              aria-label="Close bot tools"
+              aria-label="Close bot plugins"
               onClick={() => onOpenChange(false)}
             >
               <XIcon className="size-4" />
             </Button>
           </div>
           <p className="mt-1 text-sm text-muted-foreground">
-            Choose which workspace tools this bot can use.
+            Choose which plugins this bot can use.
           </p>
           <div className="mt-4 flex items-center gap-2">
             <label className="flex min-w-0 flex-1 items-center gap-2 rounded-lg border border-input bg-background px-2.5 focus-within:ring-2 focus-within:ring-ring">
@@ -218,8 +218,8 @@ export function BotToolsSheet({
               <Input
                 value={query}
                 onChange={(event) => setQuery(event.currentTarget.value)}
-                placeholder="Search tools"
-                aria-label="Search bot tools"
+                placeholder="Search plugins"
+                aria-label="Search bot plugins"
                 className="border-0 px-0 shadow-none focus-visible:ring-0"
               />
             </label>
@@ -246,9 +246,7 @@ export function BotToolsSheet({
         <div className="min-h-0 flex-1 overflow-y-auto px-3 pb-6">
           {visible.length === 0 ? (
             <p className="px-2 py-10 text-center text-sm text-muted-foreground">
-              {items.length === 0
-                ? "No workspace tools are installed."
-                : "No tools match your search."}
+              {items.length === 0 ? "No plugins are installed." : "No plugins match your search."}
             </p>
           ) : (
             <>

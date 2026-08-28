@@ -69,6 +69,40 @@ describe("isProviderInstancePickerReady", () => {
 
     expect(entry && isProviderInstancePickerReady(entry)).toBe(true);
   });
+
+  it("rejects an unauthenticated Mastra provider", () => {
+    const snapshot = provider({
+      provider: ProviderDriverKind.make("grok"),
+      instanceId: "grok",
+      status: "error",
+      models: [model("grok-build")],
+    });
+    const [entry] = deriveProviderInstanceEntries([
+      { ...snapshot, auth: { status: "unauthenticated" } },
+    ]);
+
+    expect(entry && isProviderInstancePickerReady(entry)).toBe(false);
+  });
+
+  it("uses Mastra model availability instead of legacy CLI status", () => {
+    const entries = deriveProviderInstanceEntries([
+      provider({
+        provider: ProviderDriverKind.make("grok"),
+        instanceId: "grok",
+        status: "error",
+        models: [model("grok-build")],
+      }),
+      provider({
+        provider: ProviderDriverKind.make("cursor"),
+        instanceId: "cursor",
+        status: "error",
+        models: [model("auto")],
+      }),
+    ]);
+
+    expect(entries[0] && isProviderInstancePickerReady(entries[0])).toBe(true);
+    expect(entries[1] && isProviderInstancePickerReady(entries[1])).toBe(false);
+  });
 });
 
 describe("isProviderInstancePickerVisible", () => {
@@ -420,7 +454,7 @@ describe("resolveDefaultProviderModelSelection", () => {
     expect(resolveDefaultProviderModelSelection(providers, stored)).toBe(stored);
   });
 
-  it("replaces a stale stored instance with the first ready instance and its model", () => {
+  it("uses a Mastra-backed warning instance before a legacy ready instance", () => {
     const providers = [
       provider({
         provider: ProviderDriverKind.make("codex"),
@@ -440,7 +474,7 @@ describe("resolveDefaultProviderModelSelection", () => {
         instanceId: ProviderInstanceId.make("removed-provider"),
         model: "stale-model",
       }),
-    ).toEqual({ instanceId: "claudeAgent", model: "claude-opus-4-8" });
+    ).toEqual({ instanceId: "codex", model: "gpt-5.6" });
   });
 
   it.each([{ enabled: false }, { availability: "unavailable" as const }])(

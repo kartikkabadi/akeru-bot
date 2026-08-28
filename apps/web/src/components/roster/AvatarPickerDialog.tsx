@@ -12,10 +12,10 @@ import {
 } from "../ui/dialog";
 import { Switch } from "../ui/switch";
 import { Toggle, ToggleGroup } from "../ui/toggle-group";
+import { downscaleAvatarImage, exceedsAvatarUploadLimit } from "./avatarUpload";
 import { BotAvatarView } from "./BotAvatarView";
 import {
   ditherSeedForName,
-  orderedDitherRgba,
   rerollDitherSeed,
   resolveUploadAvatar,
   type UploadRendering,
@@ -25,43 +25,6 @@ import type { Bot, BotAvatar, BotBlobShape } from "./types";
 import { useSaveBotAvatar } from "./useServerRoster";
 
 type PickerTab = "bot" | "generate" | "upload";
-
-// Uploads become small square data URLs so an oversized photo can neither
-// bloat the persisted roster nor blow the localStorage quota.
-const AVATAR_UPLOAD_SIZE = 128;
-const AVATAR_UPLOAD_MAX_FILE_BYTES = 8 * 1024 * 1024;
-
-async function downscaleAvatarImage(file: File): Promise<UploadRendering> {
-  const bitmap = await createImageBitmap(file);
-  try {
-    const canvas = document.createElement("canvas");
-    canvas.width = AVATAR_UPLOAD_SIZE;
-    canvas.height = AVATAR_UPLOAD_SIZE;
-    const context = canvas.getContext("2d");
-    if (context === null) throw new Error("Canvas 2D is unavailable.");
-    const side = Math.min(bitmap.width, bitmap.height);
-    context.drawImage(
-      bitmap,
-      (bitmap.width - side) / 2,
-      (bitmap.height - side) / 2,
-      side,
-      side,
-      0,
-      0,
-      AVATAR_UPLOAD_SIZE,
-      AVATAR_UPLOAD_SIZE,
-    );
-    const plainUrl = canvas.toDataURL("image/jpeg", 0.85);
-    // Both renderings up front, so the dither toggle previews instantly. The
-    // dithered image is near-1-bit, so PNG stays well under the JPEG's size.
-    const imageData = context.getImageData(0, 0, AVATAR_UPLOAD_SIZE, AVATAR_UPLOAD_SIZE);
-    orderedDitherRgba(imageData.data, imageData.width, imageData.height);
-    context.putImageData(imageData, 0, 0);
-    return { plainUrl, ditheredUrl: canvas.toDataURL("image/png") };
-  } finally {
-    bitmap.close();
-  }
-}
 
 const TAB_LABELS: Record<PickerTab, string> = {
   bot: "Blob",
@@ -112,7 +75,7 @@ export function AvatarPickerDialog({
     // decode. Save stays disabled until the latest selection finishes.
     setUpload(null);
     setFailure(null);
-    if (file.size > AVATAR_UPLOAD_MAX_FILE_BYTES) {
+    if (exceedsAvatarUploadLimit(file)) {
       setFailure("too-large");
       return;
     }

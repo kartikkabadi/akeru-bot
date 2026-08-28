@@ -39,6 +39,7 @@ describe("plugin registry mapping", () => {
       name: "Exa",
       transport: "url",
       url: "https://mcp.exa.ai/mcp",
+      authentication: "optional-oauth",
     });
   });
 

@@ -2,7 +2,9 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   blinkDelayMs,
+  buildBotRosterMenuItems,
   buildGroupedRosterSections,
+  buildGroupRosterMenuItems,
   buildRosterSections,
   buildRosterStrip,
   buildRosterTiles,
@@ -51,7 +53,11 @@ describe("resolveRosterBotId", () => {
     expect(
       resolveRosterBotId("missing", [
         bot({ id: "available", name: "Available" }),
-        bot({ id: "archived", name: "Archived", archivedAt: "2026-08-02T00:00:00.000Z" }),
+        bot({
+          id: "archived",
+          name: "Archived",
+          archivedAt: "2026-08-02T00:00:00.000Z",
+        }),
       ]),
     ).toBe("available");
   });
@@ -100,6 +106,17 @@ describe("buildGroupedRosterSections", () => {
     updatedAt: "2026-08-01T00:00:00.000Z",
   };
 
+  it("keeps real group headings reachable when they have no visible roster bots", () => {
+    const emptyGroup = { ...group, id: "group-empty", name: "Empty", bossBotId: null, members: [] };
+    const sections = buildGroupedRosterSections(
+      [bot({ id: "pinned", name: "Pinned", groupId: group.id, pinned: true })],
+      [group, emptyGroup],
+    );
+
+    expect(sections.map((section) => section.name)).toEqual(["Product", "Empty"]);
+    expect(sections.every((section) => section.bots.length === 0)).toBe(true);
+  });
+
   it("shows assigned groups before Unassigned and leaves pinned bots in the strip", () => {
     const sections = buildGroupedRosterSections(
       [
@@ -116,12 +133,103 @@ describe("buildGroupedRosterSections", () => {
   });
 });
 
+describe("roster context menus", () => {
+  const groups: Group[] = [
+    {
+      id: "group-product",
+      name: "Product",
+      bossBotId: null,
+      members: [],
+      createdAt: "2026-08-01T00:00:00.000Z",
+      updatedAt: "2026-08-01T00:00:00.000Z",
+    },
+    {
+      id: "group-support",
+      name: "Support",
+      bossBotId: null,
+      members: [],
+      createdAt: "2026-08-01T00:00:00.000Z",
+      updatedAt: "2026-08-01T00:00:00.000Z",
+    },
+  ];
+
+  it("builds bot actions and disables the current move target", () => {
+    const items = buildBotRosterMenuItems(
+      bot({
+        id: "helper",
+        name: "Helper",
+        groupId: "group-product",
+        pinned: true,
+      }),
+      groups,
+      true,
+    );
+
+    expect(items.map((item) => item.id)).toEqual([
+      "unpin",
+      "move",
+      "mark-unread",
+      "edit-profile",
+      "duplicate",
+      "copy-conversation-id",
+      "copy-bot-id",
+      "archive",
+      "delete",
+    ]);
+    expect(items[1]?.children).toEqual([
+      { id: "move:unassigned", label: "Unassigned", disabled: false },
+      { id: "move:group-product", label: "Product", disabled: true },
+      { id: "move:group-support", label: "Support", disabled: false },
+    ]);
+  });
+
+  it("disables moving a group boss", () => {
+    const items = buildBotRosterMenuItems(
+      bot({ id: "boss", name: "Boss", groupId: "group-product" }),
+      [{ ...groups[0]!, bossBotId: "boss" }],
+    );
+
+    expect(items.find((item) => item.id === "move")?.disabled).toBe(true);
+    expect(items.find((item) => item.id === "archive")?.disabled).toBe(true);
+    expect(items.find((item) => item.id === "delete")?.disabled).toBe(true);
+  });
+
+  it("disables conversation actions when no conversation exists", () => {
+    const items = buildBotRosterMenuItems(bot({ id: "new", name: "New" }), groups);
+    expect(items.find((item) => item.id === "mark-unread")?.disabled).toBe(true);
+    expect(items.find((item) => item.id === "copy-conversation-id")?.disabled).toBe(true);
+    expect(items.find((item) => item.id === "delete")?.disabled).toBe(false);
+  });
+
+  it("builds group ordering actions with boundary states", () => {
+    expect(buildGroupRosterMenuItems(0, 2)).toEqual([
+      { id: "rename", label: "Rename", icon: "pencil" },
+      { id: "move-up", label: "Move up", icon: "arrow-up", disabled: true },
+      { id: "move-down", label: "Move down", icon: "arrow-down", disabled: false },
+      {
+        id: "delete",
+        label: "Delete",
+        icon: "trash",
+        destructive: true,
+        separatorBefore: true,
+      },
+    ]);
+    expect(buildGroupRosterMenuItems(1, 2).find((item) => item.id === "move-down")?.disabled).toBe(
+      true,
+    );
+  });
+});
+
 describe("buildRosterStrip", () => {
   it("hides archived bots and puts pinned bots first without recency sorting", () => {
     const strip = buildRosterStrip(
       [
         bot({ id: "quiet", name: "Quiet" }),
-        bot({ id: "gone", name: "Gone", archivedAt: "2026-08-20T00:00:00.000Z" }),
+        bot({
+          id: "gone",
+          name: "Gone",
+          archivedAt: "2026-08-20T00:00:00.000Z",
+        }),
         bot({ id: "pinned", name: "Pinned", pinned: true }),
         bot({ id: "busy", name: "Busy" }),
       ],
@@ -139,7 +247,10 @@ describe("buildRosterTiles", () => {
     const messages = Object.fromEntries(
       bots.map((entry, index) => [
         entry.id,
-        { text: `${index}`, at: `2026-08-${String(index + 1).padStart(2, "0")}T10:00:00.000Z` },
+        {
+          text: `${index}`,
+          at: `2026-08-${String(index + 1).padStart(2, "0")}T10:00:00.000Z`,
+        },
       ]),
     );
 
@@ -156,8 +267,18 @@ describe("buildRosterTiles", () => {
 
 describe("filterRosterBots", () => {
   const bots = [
-    bot({ id: "1", name: "Akeru", label: "Research", description: "Finds evidence" }),
-    bot({ id: "2", name: "Mori", label: "Design", description: "Reviews interfaces" }),
+    bot({
+      id: "1",
+      name: "Akeru",
+      label: "Research",
+      description: "Finds evidence",
+    }),
+    bot({
+      id: "2",
+      name: "Mori",
+      label: "Design",
+      description: "Reviews interfaces",
+    }),
   ];
 
   it("matches everything on a blank query", () => {
@@ -218,14 +339,16 @@ describe("resolveBotPresence", () => {
   it("is idle without a linked thread or running turn", () => {
     expect(resolveBotPresence(null)).toBe("idle");
     expect(resolveBotPresence(shell({}))).toBe("idle");
-    expect(resolveBotPresence(shell({ status: "running", activeTurnId: null }))).toBe("idle");
     expect(resolveBotPresence(shell({ status: "ready" }))).toBe("idle");
+    expect(resolveBotPresence(shell({ status: "stopped" }))).toBe("idle");
   });
 
-  it("works while a turn runs or background work stays live", () => {
+  it("works while a turn starts, runs, or background work stays live", () => {
     expect(resolveBotPresence(shell({ status: "running", activeTurnId: "turn-1" }))).toBe(
       "working",
     );
+    expect(resolveBotPresence(shell({ status: "starting", activeTurnId: null }))).toBe("working");
+    expect(resolveBotPresence(shell({ status: "running", activeTurnId: null }))).toBe("working");
     expect(resolveBotPresence(shell({ backgroundLiveness: "working" }))).toBe("working");
     expect(resolveBotPresence(shell({ backgroundLiveness: "monitoring" }))).toBe("idle");
   });
@@ -233,7 +356,11 @@ describe("resolveBotPresence", () => {
   it("needs-you outranks a running turn", () => {
     expect(
       resolveBotPresence(
-        shell({ status: "running", activeTurnId: "turn-1", hasPendingApprovals: true }),
+        shell({
+          status: "running",
+          activeTurnId: "turn-1",
+          hasPendingApprovals: true,
+        }),
       ),
     ).toBe("needs-you");
     expect(resolveBotPresence(shell({ hasPendingUserInput: true }))).toBe("needs-you");
@@ -242,7 +369,11 @@ describe("resolveBotPresence", () => {
 
 describe("resolveLatestRosterMessage", () => {
   const messages = (
-    entries: Array<{ role: "user" | "assistant" | "system"; text: string; at: string }>,
+    entries: Array<{
+      role: "user" | "assistant" | "system";
+      text: string;
+      at: string;
+    }>,
   ) =>
     entries.map((entry, index) => ({
       id: `message-${index}`,
@@ -272,7 +403,11 @@ describe("resolveLatestRosterMessage", () => {
       resolveLatestRosterMessage(
         fallback,
         messages([
-          { role: "assistant", text: "Older answer", at: "2026-08-20T10:02:00.000Z" },
+          {
+            role: "assistant",
+            text: "Older answer",
+            at: "2026-08-20T10:02:00.000Z",
+          },
           { role: "system", text: "Internal", at: "2026-08-20T10:04:00.000Z" },
           { role: "assistant", text: "", at: "2026-08-20T10:05:00.000Z" },
         ]),
@@ -330,7 +465,13 @@ describe("resolveBlobRendering", () => {
       shape: DEFAULT_BLOB_SHAPE,
       color: DEFAULT_BLOB_COLOR,
     });
-    expect(resolveBlobRendering({ kind: "image", assetPath: "/a.png", dithered: false })).toEqual({
+    expect(
+      resolveBlobRendering({
+        kind: "image",
+        assetPath: "/a.png",
+        dithered: false,
+      }),
+    ).toEqual({
       shape: DEFAULT_BLOB_SHAPE,
       color: DEFAULT_BLOB_COLOR,
     });
@@ -341,7 +482,11 @@ describe("resolveBlobRendering", () => {
   });
 
   it("falls back for an unknown shape or empty color from persisted data", () => {
-    const persisted = { kind: "blob", shape: "starburst", color: "" } as unknown as BotAvatar;
+    const persisted = {
+      kind: "blob",
+      shape: "starburst",
+      color: "",
+    } as unknown as BotAvatar;
     expect(resolveBlobRendering(persisted)).toEqual({
       shape: DEFAULT_BLOB_SHAPE,
       color: DEFAULT_BLOB_COLOR,
@@ -349,7 +494,11 @@ describe("resolveBlobRendering", () => {
   });
 
   it("falls back for a retired shape name", () => {
-    const persisted = { kind: "blob", shape: "pebble", color: "#FFFFFF" } as unknown as BotAvatar;
+    const persisted = {
+      kind: "blob",
+      shape: "pebble",
+      color: "#FFFFFF",
+    } as unknown as BotAvatar;
     expect(resolveBlobRendering(persisted)).toEqual({
       shape: DEFAULT_BLOB_SHAPE,
       color: "#FFFFFF",

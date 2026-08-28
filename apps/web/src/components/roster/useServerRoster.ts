@@ -1,6 +1,7 @@
 import { useAtomValue } from "@effect/atom-react";
-import { BotId, type EnvironmentId } from "@t3tools/contracts";
-import { useCallback, useEffect } from "react";
+import type { EnvironmentId, OrchestrationBot, OrchestrationGroup } from "@t3tools/contracts";
+import { Atom } from "effect/unstable/reactivity";
+import { useCallback, useEffect, useState } from "react";
 
 import {
   botEnvironment,
@@ -8,43 +9,47 @@ import {
   environmentGroupsAtom,
   environmentRosterLoadedAtom,
 } from "../../state/bots";
-import { usePrimaryEnvironmentId } from "../../state/environments";
+import { useEnvironments, usePrimaryEnvironmentId } from "../../state/environments";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { useRosterStore } from "./rosterStore";
 import type { BotAvatar } from "./types";
 
-const NO_ENVIRONMENT = "" as EnvironmentId;
+const EMPTY_BOTS_ATOM = Atom.make<ReadonlyArray<OrchestrationBot>>([]);
+const EMPTY_GROUPS_ATOM = Atom.make<ReadonlyArray<OrchestrationGroup>>([]);
+const EMPTY_ROSTER_LOADED_ATOM = Atom.make(false);
+
+export function resolveRosterLoadingState(input: {
+  readonly environmentCatalogReady: boolean;
+  readonly environmentId: EnvironmentId | null;
+  readonly snapshotLoaded: boolean;
+  readonly syncedEnvironmentId: EnvironmentId | null;
+}): boolean {
+  if (!input.environmentCatalogReady) return true;
+  if (input.environmentId === null) return false;
+  return !input.snapshotLoaded || input.syncedEnvironmentId !== input.environmentId;
+}
 
 /** Mirrors the primary environment's persisted bot roster into the UI store. */
-export function useServerRosterSync(): void {
+export function useServerRosterSync(): boolean {
   const environmentId = usePrimaryEnvironmentId();
-  const atomKey = environmentId ?? NO_ENVIRONMENT;
-  const loaded = useAtomValue(environmentRosterLoadedAtom(atomKey));
-  const bots = useAtomValue(environmentBotsAtom(atomKey));
-  const groups = useAtomValue(environmentGroupsAtom(atomKey));
-  const createBot = useAtomCommand(botEnvironment.create, { reportFailure: false });
+  const { isReady: environmentCatalogReady } = useEnvironments();
+  const loaded = useAtomValue(
+    environmentId === null ? EMPTY_ROSTER_LOADED_ATOM : environmentRosterLoadedAtom(environmentId),
+  );
+  const bots = useAtomValue(
+    environmentId === null ? EMPTY_BOTS_ATOM : environmentBotsAtom(environmentId),
+  );
+  const groups = useAtomValue(
+    environmentId === null ? EMPTY_GROUPS_ATOM : environmentGroupsAtom(environmentId),
+  );
+  const [syncedEnvironmentId, setSyncedEnvironmentId] = useState<EnvironmentId | null>(null);
 
   useEffect(() => {
-    if (environmentId === null || !loaded) return;
-    if (bots.length === 0) {
-      void createBot({
-        environmentId,
-        input: {
-          botId: BotId.make("bot-akeru"),
-          name: "Akeru",
-          title: "Generalist",
-          label: null,
-          description: null,
-          avatar: { kind: "blob", shape: "circle", color: "#5B7FD4" },
-          engine: null,
-          sandbox: null,
-          runtimeMode: "full-access",
-          usageCap: null,
-          groupId: null,
-        },
-      });
+    if (environmentId === null) {
+      setSyncedEnvironmentId(null);
       return;
     }
+    if (!loaded) return;
     useRosterStore.getState().replaceRoster({
       bots: bots.map((bot) => ({
         ...bot,
@@ -53,12 +58,22 @@ export function useServerRosterSync(): void {
       })),
       groups: groups.map((group) => ({ ...group })),
     });
-  }, [bots, createBot, environmentId, groups, loaded]);
+    setSyncedEnvironmentId(environmentId);
+  }, [bots, environmentId, groups, loaded]);
+
+  return resolveRosterLoadingState({
+    environmentCatalogReady,
+    environmentId,
+    snapshotLoaded: loaded,
+    syncedEnvironmentId,
+  });
 }
 
 export function useSaveBotAvatar(): (botId: string, avatar: BotAvatar) => Promise<boolean> {
   const environmentId = usePrimaryEnvironmentId();
-  const bots = useAtomValue(environmentBotsAtom(environmentId ?? NO_ENVIRONMENT));
+  const bots = useAtomValue(
+    environmentId === null ? EMPTY_BOTS_ATOM : environmentBotsAtom(environmentId),
+  );
   const updateBot = useAtomCommand(botEnvironment.update, { reportFailure: false });
 
   return useCallback(

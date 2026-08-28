@@ -70,13 +70,6 @@ export const SETTINGS_SEARCH_ITEMS = [
     to: "/settings/appearance",
   },
   {
-    id: "environment-identification",
-    title: "Environment identification",
-    to: "/settings/appearance",
-    // The setting is stage-dependent, so its parent section is the stable destination.
-    targetId: "appearance",
-  },
-  {
     id: "interface-font",
     title: "Interface font",
     to: "/settings/appearance",
@@ -92,11 +85,6 @@ export const SETTINGS_SEARCH_ITEMS = [
     to: "/settings/appearance",
   },
   {
-    id: "terminal-font",
-    title: "Terminal font",
-    to: "/settings/appearance",
-  },
-  {
     id: "font-smoothing",
     title: "Font smoothing",
     to: "/settings/appearance",
@@ -105,21 +93,6 @@ export const SETTINGS_SEARCH_ITEMS = [
     id: "word-wrap",
     title: "Word wrap",
     to: "/settings/appearance",
-  },
-  {
-    id: "project-grouping",
-    title: "Project grouping",
-    to: "/settings/general",
-  },
-  {
-    id: "auto-settle-inactive-threads",
-    title: "Auto-settle inactive threads",
-    to: "/settings/general",
-  },
-  {
-    id: "auto-settle-merged-threads",
-    title: "Auto-settle merged threads",
-    to: "/settings/general",
   },
   {
     id: "time-format",
@@ -132,75 +105,14 @@ export const SETTINGS_SEARCH_ITEMS = [
     to: "/settings/general",
   },
   {
-    id: "hide-whitespace-changes",
-    title: "Hide whitespace changes",
-    to: "/settings/general",
-  },
-  {
-    id: "skills-in-slash-menu",
-    title: "Show skills in slash menu",
-    to: "/settings/general",
-  },
-  {
-    id: "provider-update-checks",
-    title: "Provider update checks",
-    to: "/settings/general",
-  },
-  {
-    id: "new-threads",
-    title: "New threads",
-    to: "/settings/general",
-  },
-  {
-    id: "start-from-origin",
-    title: "Start from origin",
-    to: "/settings/general",
-    targetId: "new-threads",
-  },
-  {
-    id: "add-project-starts-in",
-    title: "Add project starts in",
-    to: "/settings/general",
-  },
-  {
-    id: "archive-confirmation",
-    title: "Archive confirmation",
-    to: "/settings/general",
-  },
-  {
-    id: "delete-confirmation",
-    title: "Delete confirmation",
-    to: "/settings/general",
-  },
-  {
     id: "quit-confirmation",
     title: "Hold to quit",
     to: "/settings/general",
     desktopOnly: true,
   },
   {
-    id: "text-generation-model",
-    title: "Text generation model",
-    to: "/settings/general",
-  },
-  {
     id: "diagnostics",
     title: "Diagnostics",
-    to: "/settings/general",
-  },
-  {
-    id: "legacy-plan-mode",
-    title: "Plan mode (legacy)",
-    to: "/settings/general",
-  },
-  {
-    id: "legacy-token-streaming",
-    title: "Stream token by token (legacy)",
-    to: "/settings/general",
-  },
-  {
-    id: "legacy-sidebar",
-    title: "Sidebar (legacy)",
     to: "/settings/general",
   },
   {

@@ -227,6 +227,11 @@ export function ProvidersPanel() {
       ? null
       : serverEnvironment.subscriptionAuth({ environmentId, input: {} }),
   );
+  const localCliQuery = useEnvironmentQuery(
+    environmentId === null
+      ? null
+      : serverEnvironment.localSubscriptionClis({ environmentId, input: {} }),
+  );
   const startAuth = useAtomCommand(serverEnvironment.startSubscriptionAuth, {
     reportFailure: false,
   });
@@ -392,6 +397,30 @@ export function ProvidersPanel() {
             busy={busyProvider === definition.id || statusQuery.isPending}
             onConnect={() => void connect(definition)}
             onDisconnect={() => void disconnect(definition.id)}
+          />
+        ))}
+      </SettingsSection>
+
+      <SettingsSection title="Local subscription CLIs">
+        <div className="px-3 pb-2 text-[13px] leading-[1.45] text-muted-foreground sm:px-4">
+          Akeru checks this environment's PATH. Each row shows what it found and one next step.
+        </div>
+        {localCliQuery.data?.providers.map((provider) => (
+          <SettingsRow
+            key={provider.id}
+            title={
+              <span className="flex items-center gap-2">
+                {provider.label}
+                <Badge
+                  variant={provider.state === "detected" ? "success" : "secondary"}
+                  className="h-4 px-1.5 text-[10px]"
+                >
+                  {provider.state === "detected" ? "Detected" : "Missing"}
+                </Badge>
+              </span>
+            }
+            description={provider.nextStep}
+            status={provider.resolvedPath ?? provider.command}
           />
         ))}
       </SettingsSection>

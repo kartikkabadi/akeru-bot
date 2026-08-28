@@ -12,11 +12,10 @@ import { Route as rootRouteImport } from './routes/__root'
 import { Route as UsageRouteImport } from './routes/usage'
 import { Route as SettingsRouteImport } from './routes/settings'
 import { Route as PairRouteImport } from './routes/pair'
-import { Route as ConnectRouteImport } from './routes/connect'
 import { Route as ChatRouteImport } from './routes/_chat'
 import { Route as ChatIndexRouteImport } from './routes/_chat.index'
 import { Route as ProjectsProjectKeyRouteImport } from './routes/projects.$projectKey'
-import { Route as ConnectCallbackRouteImport } from './routes/connect_.callback'
+import { Route as PluginsOauthCallbackRouteImport } from './routes/plugins_.oauth.callback'
 import { Route as ChatGroupsGroupIdRouteImport } from './routes/_chat.groups.$groupId'
 import { Route as ChatDraftDraftIdRouteImport } from './routes/_chat.draft.$draftId'
 import { Route as ChatBotsBotIdRouteImport } from './routes/_chat.bots.$botId'
@@ -37,11 +36,6 @@ const PairRoute = PairRouteImport.update({
   path: '/pair',
   getParentRoute: () => rootRouteImport,
 } as any)
-const ConnectRoute = ConnectRouteImport.update({
-  id: '/connect',
-  path: '/connect',
-  getParentRoute: () => rootRouteImport,
-} as any)
 const ChatRoute = ChatRouteImport.update({
   id: '/_chat',
   getParentRoute: () => rootRouteImport,
@@ -56,9 +50,9 @@ const ProjectsProjectKeyRoute = ProjectsProjectKeyRouteImport.update({
   path: '/projects/$projectKey',
   getParentRoute: () => rootRouteImport,
 } as any)
-const ConnectCallbackRoute = ConnectCallbackRouteImport.update({
-  id: '/connect_/callback',
-  path: '/connect/callback',
+const PluginsOauthCallbackRoute = PluginsOauthCallbackRouteImport.update({
+  id: '/plugins_/oauth/callback',
+  path: '/plugins/oauth/callback',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ChatGroupsGroupIdRoute = ChatGroupsGroupIdRouteImport.update({
@@ -85,96 +79,89 @@ const ChatEnvironmentIdThreadIdRoute =
 
 export interface FileRoutesByFullPath {
   '/': typeof ChatIndexRoute
-  '/connect': typeof ConnectRoute
   '/pair': typeof PairRoute
   '/settings': typeof SettingsRoute
   '/usage': typeof UsageRoute
-  '/connect/callback': typeof ConnectCallbackRoute
   '/projects/$projectKey': typeof ProjectsProjectKeyRoute
   '/$environmentId/$threadId': typeof ChatEnvironmentIdThreadIdRoute
   '/bots/$botId': typeof ChatBotsBotIdRoute
   '/draft/$draftId': typeof ChatDraftDraftIdRoute
   '/groups/$groupId': typeof ChatGroupsGroupIdRoute
+  '/plugins/oauth/callback': typeof PluginsOauthCallbackRoute
 }
 export interface FileRoutesByTo {
-  '/connect': typeof ConnectRoute
   '/pair': typeof PairRoute
   '/settings': typeof SettingsRoute
   '/usage': typeof UsageRoute
-  '/connect/callback': typeof ConnectCallbackRoute
   '/projects/$projectKey': typeof ProjectsProjectKeyRoute
   '/': typeof ChatIndexRoute
   '/$environmentId/$threadId': typeof ChatEnvironmentIdThreadIdRoute
   '/bots/$botId': typeof ChatBotsBotIdRoute
   '/draft/$draftId': typeof ChatDraftDraftIdRoute
   '/groups/$groupId': typeof ChatGroupsGroupIdRoute
+  '/plugins/oauth/callback': typeof PluginsOauthCallbackRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/_chat': typeof ChatRouteWithChildren
-  '/connect': typeof ConnectRoute
   '/pair': typeof PairRoute
   '/settings': typeof SettingsRoute
   '/usage': typeof UsageRoute
-  '/connect_/callback': typeof ConnectCallbackRoute
   '/projects/$projectKey': typeof ProjectsProjectKeyRoute
   '/_chat/': typeof ChatIndexRoute
   '/_chat/$environmentId/$threadId': typeof ChatEnvironmentIdThreadIdRoute
   '/_chat/bots/$botId': typeof ChatBotsBotIdRoute
   '/_chat/draft/$draftId': typeof ChatDraftDraftIdRoute
   '/_chat/groups/$groupId': typeof ChatGroupsGroupIdRoute
+  '/plugins_/oauth/callback': typeof PluginsOauthCallbackRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
     | '/'
-    | '/connect'
     | '/pair'
     | '/settings'
     | '/usage'
-    | '/connect/callback'
     | '/projects/$projectKey'
     | '/$environmentId/$threadId'
     | '/bots/$botId'
     | '/draft/$draftId'
     | '/groups/$groupId'
+    | '/plugins/oauth/callback'
   fileRoutesByTo: FileRoutesByTo
   to:
-    | '/connect'
     | '/pair'
     | '/settings'
     | '/usage'
-    | '/connect/callback'
     | '/projects/$projectKey'
     | '/'
     | '/$environmentId/$threadId'
     | '/bots/$botId'
     | '/draft/$draftId'
     | '/groups/$groupId'
+    | '/plugins/oauth/callback'
   id:
     | '__root__'
     | '/_chat'
-    | '/connect'
     | '/pair'
     | '/settings'
     | '/usage'
-    | '/connect_/callback'
     | '/projects/$projectKey'
     | '/_chat/'
     | '/_chat/$environmentId/$threadId'
     | '/_chat/bots/$botId'
     | '/_chat/draft/$draftId'
     | '/_chat/groups/$groupId'
+    | '/plugins_/oauth/callback'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   ChatRoute: typeof ChatRouteWithChildren
-  ConnectRoute: typeof ConnectRoute
   PairRoute: typeof PairRoute
   SettingsRoute: typeof SettingsRoute
   UsageRoute: typeof UsageRoute
-  ConnectCallbackRoute: typeof ConnectCallbackRoute
   ProjectsProjectKeyRoute: typeof ProjectsProjectKeyRoute
+  PluginsOauthCallbackRoute: typeof PluginsOauthCallbackRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -200,13 +187,6 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof PairRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/connect': {
-      id: '/connect'
-      path: '/connect'
-      fullPath: '/connect'
-      preLoaderRoute: typeof ConnectRouteImport
-      parentRoute: typeof rootRouteImport
-    }
     '/_chat': {
       id: '/_chat'
       path: ''
@@ -228,11 +208,11 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ProjectsProjectKeyRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/connect_/callback': {
-      id: '/connect_/callback'
-      path: '/connect/callback'
-      fullPath: '/connect/callback'
-      preLoaderRoute: typeof ConnectCallbackRouteImport
+    '/plugins_/oauth/callback': {
+      id: '/plugins_/oauth/callback'
+      path: '/plugins/oauth/callback'
+      fullPath: '/plugins/oauth/callback'
+      preLoaderRoute: typeof PluginsOauthCallbackRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/_chat/groups/$groupId': {
@@ -286,12 +266,11 @@ const ChatRouteWithChildren = ChatRoute._addFileChildren(ChatRouteChildren)
 
 const rootRouteChildren: RootRouteChildren = {
   ChatRoute: ChatRouteWithChildren,
-  ConnectRoute: ConnectRoute,
   PairRoute: PairRoute,
   SettingsRoute: SettingsRoute,
   UsageRoute: UsageRoute,
-  ConnectCallbackRoute: ConnectCallbackRoute,
   ProjectsProjectKeyRoute: ProjectsProjectKeyRoute,
+  PluginsOauthCallbackRoute: PluginsOauthCallbackRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

@@ -1,20 +1,100 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vite-plus/test";
 
-import { deriveProviderInstanceEntries } from "../../providerInstances";
-import { composerTestInstanceId, makeComposerTestProvider } from "../../test/chatComposerProps";
 import {
   BotPromptComposer,
+  botVoiceErrorMessage,
+  canSubmitBotPrompt,
+  filterBotImageFiles,
   findMentionedBotId,
+  formatBotVoiceDuration,
   isBotPromptExpanded,
+  mergeBotImageFiles,
+  shouldClearSubmittedBotDraft,
   shouldFocusBotPromptForKey,
 } from "./BotPromptComposer";
 
 describe("bot prompt composer", () => {
-  it("expands for long or multiline prompts", () => {
-    expect(isBotPromptExpanded("Short prompt")).toBe(false);
+  it("expands as soon as the prompt has text", () => {
+    expect(isBotPromptExpanded("")).toBe(false);
+    expect(isBotPromptExpanded("x")).toBe(true);
     expect(isBotPromptExpanded("Line one\nLine two")).toBe(true);
-    expect(isBotPromptExpanded("x".repeat(81))).toBe(true);
+  });
+
+  it("formats voice input state and microphone errors", () => {
+    expect(formatBotVoiceDuration(0)).toBe("0:00");
+    expect(formatBotVoiceDuration(65)).toBe("1:05");
+    expect(botVoiceErrorMessage({ name: "NotAllowedError" })).toBe(
+      "Microphone access denied. Enable microphone access in system settings.",
+    );
+    expect(botVoiceErrorMessage({ name: "NotFoundError" })).toBe("No microphone was found.");
+  });
+
+  it("keeps image uploads and rejects other files", () => {
+    const image = new File(["image"], "photo.png", { type: "image/png" });
+    const text = new File(["text"], "notes.txt", { type: "text/plain" });
+    expect(filterBotImageFiles([image, text])).toEqual([image]);
+  });
+
+  it("deduplicates the same file object but preserves distinct metadata collisions", () => {
+    const first = new File(["first"], "photo.png", {
+      type: "image/png",
+      lastModified: 1,
+    });
+    const collision = new File(["other"], "photo.png", {
+      type: "image/png",
+      lastModified: 1,
+    });
+    expect(mergeBotImageFiles([], [first, first, collision])).toEqual([first, collision]);
+  });
+
+  it("blocks disabled and empty submissions", () => {
+    expect(canSubmitBotPrompt({ disabled: true, fileCount: 0, prompt: "hello" })).toBe(false);
+    expect(canSubmitBotPrompt({ disabled: false, fileCount: 0, prompt: "   " })).toBe(false);
+    expect(canSubmitBotPrompt({ disabled: false, fileCount: 1, prompt: "" })).toBe(true);
+  });
+
+  it("preserves edits and conversation changes made during submission", () => {
+    expect(
+      shouldClearSubmittedBotDraft({
+        currentDraft: "new text",
+        currentDraftKey: "bot-1",
+        currentRevision: 1,
+        submittedDraft: "old text",
+        submittedDraftKey: "bot-1",
+        submittedRevision: 1,
+      }),
+    ).toBe(false);
+    expect(
+      shouldClearSubmittedBotDraft({
+        currentDraft: "old text",
+        currentDraftKey: "bot-2",
+        currentRevision: 1,
+        submittedDraft: "old text",
+        submittedDraftKey: "bot-1",
+        submittedRevision: 1,
+      }),
+    ).toBe(false);
+    expect(
+      shouldClearSubmittedBotDraft({
+        currentDraft: "old text",
+        currentDraftKey: "bot-1",
+        currentRevision: 2,
+        submittedDraft: "old text",
+        submittedDraftKey: "bot-1",
+        submittedRevision: 1,
+      }),
+    ).toBe(false);
+    expect(
+      shouldClearSubmittedBotDraft({
+        currentDraft: "old text",
+        currentDraftKey: "bot-1",
+        currentRevision: 1,
+        submittedDraft: "old text",
+        submittedDraftKey: "bot-1",
+        submittedRevision: 1,
+      }),
+    ).toBe(true);
   });
 
   it("routes the latest complete group mention to its bot", () => {
@@ -47,39 +127,23 @@ describe("bot prompt composer", () => {
 
   it("uses the available chat width", () => {
     const markup = renderToStaticMarkup(
-      <BotPromptComposer
-        botName="Akeru"
-        disabled={false}
-        modelPicker={null}
-        onSubmit={vi.fn(async () => true)}
-      />,
+      <BotPromptComposer botName="Akeru" disabled={false} onSubmit={vi.fn(async () => true)} />,
     );
 
     expect(markup).toContain('<form class="w-full ');
+    expect(markup).toContain('aria-label="Start voice input"');
+    expect(markup).toContain('data-testid="bot-prompt-composer"');
+    expect(markup).toContain("overflow-visible");
+    expect(markup).not.toContain("overflow-hidden rounded-[1.65rem]");
     expect(markup).not.toContain("max-w-4xl");
   });
 
-  it("shows the active model and keeps it changeable", () => {
-    const instanceEntries = deriveProviderInstanceEntries([makeComposerTestProvider()]);
+  it("keeps model selection out of the prompt input", () => {
     const markup = renderToStaticMarkup(
-      <BotPromptComposer
-        botName="Akeru"
-        disabled={false}
-        modelPicker={{
-          activeInstanceId: composerTestInstanceId,
-          model: "gpt-5-codex",
-          instanceEntries,
-          modelOptionsByInstance: new Map([
-            [composerTestInstanceId, [{ slug: "gpt-5-codex", name: "Launchbar Model" }]],
-          ]),
-          onChange: vi.fn(),
-        }}
-        onSubmit={vi.fn(async () => true)}
-      />,
+      <BotPromptComposer botName="Akeru" disabled={false} onSubmit={vi.fn(async () => true)} />,
     );
 
-    expect(markup).toContain("Launchbar Model");
-    expect(markup).toContain('aria-label="Change model"');
-    expect(markup).toContain("data-chat-provider-model-picker");
+    expect(markup).not.toContain('aria-label="Change model"');
+    expect(markup).not.toContain("data-chat-provider-model-picker");
   });
 });
