@@ -867,11 +867,13 @@ const make = (options?: AgentControllerLiveOptions) =>
           active.session.permissions.setForTool({ toolName, policy: "allow" }),
         );
       }
+      yield* runMastra("respondToToolApproval", () =>
+        active.session.respondToToolApproval({
+          toolCallId,
+          decision: approvalDecision(input.decision, sensitiveAction),
+        }),
+      );
       if (active.activeTurn) active.activeTurn.waiting = false;
-      active.session.respondToToolApproval({
-        toolCallId,
-        decision: approvalDecision(input.decision, sensitiveAction),
-      });
       active.sensitiveToolCalls.delete(toolCallId);
       publish({
         ...baseEvent(input.threadId, active, active.activeTurn?.turnId),

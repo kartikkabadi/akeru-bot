@@ -891,6 +891,28 @@ describe("AgentControllerLive", () => {
             String(event.requestId) === "failed-cloud-auto-approval",
         ),
       );
+      mastra.session.respondToToolApproval.mockRejectedValueOnce(
+        new Error("Injected manual approval failure."),
+      );
+      const approvalError = yield* Effect.flip(
+        controller.respondToRequest({
+          threadId: codexThreadId,
+          requestId: ApprovalRequestId.make("failed-cloud-auto-approval"),
+          decision: "accept",
+        }),
+      );
+      assert.deepInclude(approvalError, {
+        _tag: "AgentControllerRuntimeError",
+        operation: "respondToToolApproval",
+      });
+      assert.isFalse(
+        events.some(
+          (event) =>
+            event.type === "request.resolved" &&
+            String(event.requestId) === "failed-cloud-auto-approval",
+        ),
+      );
+
       yield* controller.respondToRequest({
         threadId: codexThreadId,
         requestId: ApprovalRequestId.make("failed-cloud-auto-approval"),
