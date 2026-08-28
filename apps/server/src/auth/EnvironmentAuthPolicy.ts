@@ -11,7 +11,7 @@ export class EnvironmentAuthPolicy extends Context.Service<
   {
     readonly getDescriptor: () => Effect.Effect<ServerAuthDescriptor>;
   }
->()("t3/auth/EnvironmentAuthPolicy") {}
+>()("akeru-bot/auth/EnvironmentAuthPolicy") {}
 
 export const make = Effect.gen(function* () {
   const config = yield* ServerConfig.ServerConfig;
@@ -36,7 +36,7 @@ export const make = Effect.gen(function* () {
   const descriptor: ServerAuthDescriptor = {
     policy,
     bootstrapMethods,
-    sessionMethods: ["browser-session-cookie", "bearer-access-token", "dpop-access-token"],
+    sessionMethods: ["browser-session-cookie", "bearer-access-token"],
     sessionCookieName: resolveSessionCookieName({
       mode: config.mode,
       port: config.port,

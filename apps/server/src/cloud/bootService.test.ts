@@ -26,13 +26,13 @@ import {
 it("keeps systemd pinned to the stable launcher rather than a versioned server", () => {
   const unit = BootService.renderBootServiceUnit({
     nodePath: "/usr/bin/node",
-    launcherPath: "/home/theo/.t3/runtime/service-launcher.mjs",
-    baseDir: "/home/theo/.t3",
-    logPath: "/home/theo/.t3/userdata/logs/boot-service.log",
+    launcherPath: "/home/theo/.akeru/runtime/service-launcher.mjs",
+    baseDir: "/home/theo/.akeru",
+    logPath: "/home/theo/.akeru/userdata/logs/boot-service.log",
     unitPath: "/home/theo/.config/systemd/user/t3code.service",
   });
 
-  expect(unit).toContain("ExecStart=/usr/bin/node /home/theo/.t3/runtime/service-launcher.mjs");
+  expect(unit).toContain("ExecStart=/usr/bin/node /home/theo/.akeru/runtime/service-launcher.mjs");
   expect(unit).toContain("KillMode=mixed");
   expect(unit).not.toContain("versions/1.2.3");
 });
@@ -40,9 +40,9 @@ it("keeps systemd pinned to the stable launcher rather than a versioned server",
 it("survives the kernel OOM-killing a greedy agent child", () => {
   const unit = BootService.renderBootServiceUnit({
     nodePath: "/usr/bin/node",
-    launcherPath: "/home/theo/.t3/runtime/service-launcher.mjs",
-    baseDir: "/home/theo/.t3",
-    logPath: "/home/theo/.t3/userdata/logs/boot-service.log",
+    launcherPath: "/home/theo/.akeru/runtime/service-launcher.mjs",
+    baseDir: "/home/theo/.akeru",
+    logPath: "/home/theo/.akeru/userdata/logs/boot-service.log",
     unitPath: "/home/theo/.config/systemd/user/t3code.service",
   });
 
@@ -51,9 +51,9 @@ it("survives the kernel OOM-killing a greedy agent child", () => {
 
 const macPlan = {
   nodePath: "/opt/homebrew/bin/node",
-  launcherPath: "/Users/theo/.t3/runtime/service-launcher.mjs",
-  baseDir: "/Users/theo/.t3",
-  logPath: "/Users/theo/.t3/userdata/logs/boot-service.log",
+  launcherPath: "/Users/theo/.akeru/runtime/service-launcher.mjs",
+  baseDir: "/Users/theo/.akeru",
+  logPath: "/Users/theo/.akeru/userdata/logs/boot-service.log",
   unitPath: "/Users/theo/Library/LaunchAgents/com.t3tools.t3code.service.plist",
 };
 const macInstallerPath =
@@ -64,7 +64,7 @@ it("keeps launchd pinned to the stable launcher rather than a versioned server",
   const plist = BootService.renderBootServicePlist(macPlan, macRenderOptions);
 
   expect(plist).toContain("<string>/opt/homebrew/bin/node</string>");
-  expect(plist).toContain("<string>/Users/theo/.t3/runtime/service-launcher.mjs</string>");
+  expect(plist).toContain("<string>/Users/theo/.akeru/runtime/service-launcher.mjs</string>");
   expect(plist).not.toContain("versions/1.2.3");
 });
 
@@ -87,10 +87,10 @@ it("appends both stdio streams to the boot service log", () => {
   const plist = BootService.renderBootServicePlist(macPlan, macRenderOptions);
 
   expect(plist).toContain(
-    "<key>StandardOutPath</key>\n  <string>/Users/theo/.t3/userdata/logs/boot-service.log</string>",
+    "<key>StandardOutPath</key>\n  <string>/Users/theo/.akeru/userdata/logs/boot-service.log</string>",
   );
   expect(plist).toContain(
-    "<key>StandardErrorPath</key>\n  <string>/Users/theo/.t3/userdata/logs/boot-service.log</string>",
+    "<key>StandardErrorPath</key>\n  <string>/Users/theo/.akeru/userdata/logs/boot-service.log</string>",
   );
 });
 
@@ -112,7 +112,7 @@ const makeHarness = Effect.fn("test.make_boot_service_harness")(function* (
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const home = yield* fs.makeTempDirectoryScoped({ prefix: "t3-boot-service-test-" });
-  const baseDir = path.join(home, ".t3");
+  const baseDir = path.join(home, ".akeru");
   const sourceLauncher = path.join(home, "service-launcher.mjs");
   const statePath = path.join(baseDir, "runtime", "service-state.json");
   yield* fs.writeFileString(sourceLauncher, "export {};\n");
@@ -135,7 +135,7 @@ const makeHarness = Effect.fn("test.make_boot_service_harness")(function* (
         commands.push(command);
         timeouts.set(command, input.timeout);
         return {
-          stdout: input.args[1] === "--version" ? "t3 v1.2.3\n" : "",
+          stdout: input.args[1] === "--version" ? "akeru v1.2.3\n" : "",
           stderr: "",
           code: ChildProcessSpawner.ExitCode(command === control.failCommand ? 1 : 0),
           timedOut: false,
@@ -204,6 +204,11 @@ it.layer(NodeServices.layer)("boot service install", (it) => {
       expect(yield* service.uninstall).toBe(true);
       expect((yield* service.status).installed).toBe(false);
       expect(commands.some((command) => command.startsWith("npm "))).toBe(false);
+      expect(
+        commands.some((command) =>
+          command.includes("/node_modules/akeru-bot/dist/bin.mjs --version"),
+        ),
+      ).toBe(true);
       // The stop can block up to systemd's 90s TimeoutStopSec; the runner's
       // 60s default would cancel it mid-shutdown.
       expect(timeouts.get("systemctl --user disable --now t3code.service")).toEqual(

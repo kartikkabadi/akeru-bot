@@ -1,14 +1,14 @@
 {
-  "name": "t3",
+  "name": "akeru-bot",
   "version": "0.0.34",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/pingdotgg/t3code",
+    "url": "https://github.com/opencoredev/akeru-bot",
     "directory": "apps/server"
   },
   "bin": {
-    "t3": "./dist/bin.mjs"
+    "akeru": "./dist/bin.mjs"
   },
   "files": [
     "dist"
@@ -22,19 +22,22 @@
     "test": "vp test run"
   },
   "dependencies": {
+    "@ai-sdk/anthropic": "3.0.113",
+    "@ai-sdk/openai": "3.0.101",
+    "@ai-sdk/openai-compatible": "2.0.72",
     "@anthropic-ai/claude-agent-sdk": "^0.3.170",
     "@effect/platform-bun": "catalog:",
     "@effect/platform-node": "catalog:",
     "@effect/platform-node-shared": "catalog:",
     "@effect/sql-sqlite-bun": "catalog:",
     "@ff-labs/fff-node": "0.9.4",
-    "@mastra/code-sdk": "1.5.1",
-    "@mastra/core": "1.63.0",
+    "@modelcontextprotocol/sdk": "1.29.0",
     "@opencode-ai/sdk": "^1.3.15",
     "@opencoredev/sandbox-sdk": "file:../../../sandbox-sdk/packages/sdk",
     "@pierre/diffs": "catalog:",
     "@upstash/box": "0.5.3",
     "@vercel/sandbox": "^2.5.0",
+    "ai": "6.0.266",
     "e2b": "^2.32.0",
     "effect": "catalog:",
     "msgpackr-extract": "3.0.4",

@@ -119,6 +119,17 @@ it.effect("preserves a launcher rejection as a distinct error", () =>
   }),
 );
 
+it.effect("names Akeru Bot when the launcher starts a different package version", () =>
+  Effect.gen(function* () {
+    const host = new FakeLauncherProcess({
+      protocol: SERVICE_LAUNCHER_PROTOCOL,
+      childVersion: "1.1.0",
+    });
+    const error = yield* makeClient(host, "1.0.0").pipe(Effect.flip);
+    expect(error.message).toBe("The service launcher started a different Akeru Bot version.");
+  }),
+);
+
 it.effect("rejects contradictory trial context instead of leaving activation closed", () =>
   Effect.gen(function* () {
     const host = new FakeLauncherProcess({

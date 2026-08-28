@@ -4,7 +4,7 @@
 import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as NodeOS from "node:os";
-import { PRODUCT_HOME_DIRNAME } from "@t3tools/shared/devHome";
+import { AKERU_HOME_DIRNAME } from "@t3tools/shared/devHome";
 import { fromJsonStringPretty } from "@t3tools/shared/schemaJson";
 import * as Console from "effect/Console";
 import * as DateTime from "effect/DateTime";
@@ -184,7 +184,7 @@ export const runSqliteState = Effect.fn("runSqliteState")(function* (
   const path = yield* Path.Path;
   const baseDir = path.resolve(input.baseDir);
   const sharedHome = path.resolve(
-    options.sharedHome ?? path.join(NodeOS.homedir(), PRODUCT_HOME_DIRNAME),
+    options.sharedHome ?? path.join(NodeOS.homedir(), AKERU_HOME_DIRNAME),
   );
   const databasePath = path.join(baseDir, "userdata", "state.sqlite");
   const source = yield* resolveSqlSource(input.sql, input.file);

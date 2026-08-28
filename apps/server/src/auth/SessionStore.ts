@@ -405,7 +405,7 @@ export class SessionStore extends Context.Service<
       },
     ) => Effect.Effect<void, never>;
   }
->()("t3/auth/SessionStore") {}
+>()("akeru-bot/auth/SessionStore") {}
 
 const SIGNING_SECRET_NAME = "server-signing-key";
 const DEFAULT_SESSION_TTL = Duration.days(30);
@@ -417,7 +417,7 @@ const SessionClaims = Schema.Struct({
   sid: AuthSessionId,
   sub: Schema.String,
   scopes: AuthEnvironmentScopes,
-  method: Schema.Literals(["browser-session-cookie", "bearer-access-token", "dpop-access-token"]),
+  method: Schema.Literals(["browser-session-cookie", "bearer-access-token"]),
   jkt: Schema.optionalKey(Schema.String),
   iat: Schema.Number,
   exp: Schema.Number,

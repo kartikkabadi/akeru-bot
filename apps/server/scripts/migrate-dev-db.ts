@@ -28,7 +28,7 @@
 import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as NodeOS from "node:os";
-import { PRODUCT_HOME_DIRNAME, resolveWorktreeT3Home } from "@t3tools/shared/devHome";
+import { AKERU_HOME_DIRNAME, resolveWorktreeAkeruHome } from "@t3tools/shared/devHome";
 import * as Console from "effect/Console";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -142,7 +142,7 @@ export class MigrateDevDbPhaseError extends Schema.TaggedErrorClass<MigrateDevDb
 }
 
 export interface RunMigrateDevDbInput {
-  /** Isolated .t3 directory. Defaults to `<worktree>/.t3` of the cwd. */
+  /** Isolated .akeru directory. Defaults to `<worktree>/.akeru` of the cwd. */
   readonly baseDir?: string | undefined;
   /** Source database. Defaults to `~/.akeru/userdata/state.sqlite`. */
   readonly source?: string | undefined;
@@ -362,7 +362,7 @@ export const runMigrateDevDb = Effect.fn("runMigrateDevDb")(function* (
   const path = yield* Path.Path;
 
   const sharedHome = path.resolve(
-    options.sharedHome ?? path.join(NodeOS.homedir(), PRODUCT_HOME_DIRNAME),
+    options.sharedHome ?? path.join(NodeOS.homedir(), AKERU_HOME_DIRNAME),
   );
   const sourcePath = path.resolve(
     input.source ?? path.join(sharedHome, "userdata", "state.sqlite"),
@@ -371,7 +371,7 @@ export const runMigrateDevDb = Effect.fn("runMigrateDevDb")(function* (
   const baseDir =
     input.baseDir !== undefined
       ? path.resolve(input.baseDir)
-      : yield* resolveWorktreeT3Home(process.cwd());
+      : yield* resolveWorktreeAkeruHome(process.cwd());
   if (baseDir === undefined) {
     return yield* new MigrateDevDbNotInWorktreeError();
   }

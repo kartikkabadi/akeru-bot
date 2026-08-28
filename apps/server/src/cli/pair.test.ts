@@ -7,6 +7,7 @@ import * as NodePath from "node:path";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as NetService from "@t3tools/shared/Net";
 import { assert, describe, expect, it } from "@effect/vitest";
+import * as ConfigProvider from "effect/ConfigProvider";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as TestConsole from "effect/testing/TestConsole";
@@ -21,6 +22,7 @@ import {
 import {
   DevServerNotProxiableError,
   resolveDirectPairingBaseUrl,
+  resolvePairBaseDirs,
   resolveTailscaleLocalTarget,
 } from "./pair.ts";
 
@@ -47,6 +49,40 @@ describe("pair base URL selection", () => {
     );
     expect(resolveDirectPairingBaseUrl(baseState)).toBe("http://localhost:3773");
   });
+});
+
+describe("pair home resolution", () => {
+  const legacyHomeConfig = Layer.merge(
+    ConfigProvider.layer(ConfigProvider.fromEnv({ env: { T3CODE_HOME: "/home/user/.t3" } })),
+    NodeServices.layer,
+  );
+
+  it.effect("ignores T3CODE_HOME and defaults to ~/.akeru", () =>
+    Effect.gen(function* () {
+      const bases = yield* resolvePairBaseDirs(undefined, NodeOS.tmpdir());
+      assert.deepEqual(bases, [NodePath.join(NodeOS.homedir(), ".akeru")]);
+    }).pipe(Effect.provide(legacyHomeConfig)),
+  );
+
+  it.effect("uses a linked worktree's .akeru before the shared home", () =>
+    Effect.acquireUseRelease(
+      Effect.sync(() => {
+        const root = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "akeru-pair-worktree-"));
+        NodeFS.writeFileSync(
+          NodePath.join(root, ".git"),
+          "gitdir: /elsewhere/.git/worktrees/pair-test\n",
+        );
+        return root;
+      }),
+      (root) =>
+        Effect.gen(function* () {
+          const bases = yield* resolvePairBaseDirs(undefined, root);
+          assert.equal(bases[0], NodePath.join(NodePath.resolve(root), ".akeru"));
+          assert.notInclude(bases, "/home/user/.t3");
+        }),
+      (root) => Effect.sync(() => NodeFS.rmSync(root, { recursive: true, force: true })),
+    ).pipe(Effect.provide(legacyHomeConfig)),
+  );
 });
 
 describe("pair tailscale local target", () => {
@@ -135,7 +171,7 @@ const withDescriptorServer = <A, E, R>(run: (origin: string) => Effect.Effect<A,
     (server) => Effect.sync(() => server.close()),
   );
 
-describe("t3 pair", () => {
+describe("akeru pair", () => {
   it.effect("mints a token and prints a QR pairing URL for a live server", () =>
     withDescriptorServer((origin) =>
       Effect.gen(function* () {
@@ -168,7 +204,7 @@ describe("t3 pair", () => {
         // @effect-diagnostics-next-line preferSchemaOverJson:off - CLI JSON output is decoded as a presentation DTO.
         const credentials = JSON.parse(listed) as ReadonlyArray<{ readonly label?: string }>;
         assert.equal(credentials.length, 1);
-        assert.equal(credentials[0]?.label, "t3 pair");
+        assert.equal(credentials[0]?.label, "akeru pair");
       }),
     ).pipe(Effect.provide(NodeServices.layer)),
   );
@@ -194,7 +230,7 @@ describe("t3 pair", () => {
     ).pipe(Effect.provide(NodeServices.layer)),
   );
 
-  it.effect("directs to t3 serve or t3 connect when no server is running", () =>
+  it.effect("directs to Akeru serve when no server is running", () =>
     Effect.gen(function* () {
       const baseDir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-pair-none-test-"));
 
@@ -205,9 +241,9 @@ describe("t3 pair", () => {
       const rendered = String(
         typeof error === "object" && error !== null && "cause" in error ? error.cause : error,
       );
-      assert.include(rendered, "No running T3 Code server found.");
-      assert.include(rendered, "npx t3 serve");
-      assert.include(rendered, "npx t3 connect");
+      assert.include(rendered, "No running Akeru Bot server found.");
+      assert.include(rendered, "npx akeru-bot serve");
+      assert.notInclude(rendered, "connect");
     }).pipe(Effect.provide(NodeServices.layer)),
   );
 
@@ -236,7 +272,7 @@ describe("t3 pair", () => {
         const rendered = String(
           typeof error === "object" && error !== null && "cause" in error ? error.cause : error,
         );
-        assert.include(rendered, "No running T3 Code server found.");
+        assert.include(rendered, "No running Akeru Bot server found.");
       }),
     ).pipe(Effect.provide(NodeServices.layer)),
   );
@@ -262,7 +298,7 @@ describe("t3 pair", () => {
       const rendered = String(
         typeof error === "object" && error !== null && "cause" in error ? error.cause : error,
       );
-      assert.include(rendered, "No running T3 Code server found.");
+      assert.include(rendered, "No running Akeru Bot server found.");
     }).pipe(Effect.provide(NodeServices.layer)),
   );
 });

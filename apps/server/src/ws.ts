@@ -47,16 +47,16 @@ import {
   ProjectSearchEntriesError,
   ProjectWriteFileError,
   ProviderUploadFeedbackError,
-  RelayClientInstallFailedError,
-  type RelayClientInstallProgressEvent,
   type ServerSelfUpdateError,
   type ServerSelfUpdateProgressEvent,
+  type ServerSettingsPatch,
   type FilesystemBrowseFailure,
   FilesystemBrowseError,
   AssetWorkspaceContextNotFoundError,
   AssetWorkspaceContextResolutionError,
   RpcClientId,
   EnvironmentAuthorizationError,
+  McpAuthError,
   SubscriptionAuthError,
   ThreadId,
   type TerminalAttachStreamEvent,
@@ -67,13 +67,20 @@ import {
   WsRpcGroup,
 } from "@t3tools/contracts";
 import { resolveServerBackgroundActivitySettings } from "@t3tools/shared/backgroundActivitySettings";
-import { SubscriptionAuthService } from "./subscription-auth/service.ts";
+import { HostProcessEnvironment, HostProcessPlatform } from "@t3tools/shared/hostProcess";
+import {
+  SubscriptionAuthService,
+  subscriptionProviderDriver,
+  subscriptionProviderSettingsPatch,
+  subscriptionProviderSettingsPatchFor,
+} from "./subscription-auth/service.ts";
 import { HttpRouter, HttpServerRequest, HttpServerRespondable } from "effect/unstable/http";
 import { RpcSerialization, RpcServer } from "effect/unstable/rpc";
 
 import * as CheckpointDiffQuery from "./checkpointing/CheckpointDiffQuery.ts";
 import * as ServerConfig from "./config.ts";
 import * as Keybindings from "./keybindings.ts";
+import { discoverLocalSubscriptionClis } from "./provider/LocalSubscriptionCliDiscovery.ts";
 import * as ExternalLauncher from "./process/externalLauncher.ts";
 import {
   projectActivityEvent,
@@ -95,6 +102,7 @@ import {
 import * as AgentController from "./provider/Services/AgentController.ts";
 import * as ProviderRegistry from "./provider/Services/ProviderRegistry.ts";
 import * as ProviderMaintenanceRunner from "./provider/providerMaintenanceRunner.ts";
+import { stopAgentSessions } from "./provider/stopAgentSessions.ts";
 import * as ServerSelfUpdate from "./cloud/selfUpdate.ts";
 import * as ServerLifecycleEvents from "./serverLifecycleEvents.ts";
 import * as ServerRuntimeStartup from "./serverRuntimeStartup.ts";
@@ -137,9 +145,9 @@ import * as VcsDriverRegistry from "./vcs/VcsDriverRegistry.ts";
 import * as VcsProjectConfig from "./vcs/VcsProjectConfig.ts";
 import * as VcsProcess from "./vcs/VcsProcess.ts";
 import * as PairingGrantStore from "./auth/PairingGrantStore.ts";
+import { McpOAuthRuntime, toMcpAuthError } from "./mcp-auth/McpOAuth.ts";
 import * as SessionStore from "./auth/SessionStore.ts";
 import { failEnvironmentAuthInvalid, failEnvironmentInternal } from "./auth/http.ts";
-import * as RelayClient from "@t3tools/shared/relayClient";
 const isOrchestrationDispatchCommandError = Schema.is(OrchestrationDispatchCommandError);
 
 const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
@@ -425,10 +433,46 @@ function readMobileDeviceAnalyticsProps(request: HttpServerRequest.HttpServerReq
   };
 }
 
+interface McpOAuthClientOrigins {
+  readonly allowed: readonly string[];
+  readonly callback: string | undefined;
+}
+
+export function resolveMcpOAuthClientOrigins(
+  request: HttpServerRequest.HttpServerRequest,
+): McpOAuthClientOrigins {
+  const allowed = new Set<string>();
+  const origin = request.headers.origin;
+  if (origin) allowed.add(origin);
+  const host = request.headers.host?.split(",", 1)[0]?.trim();
+  const forwardedHost = request.headers["x-forwarded-host"]?.split(",", 1)[0]?.trim();
+  const forwardedProto = request.headers["x-forwarded-proto"]?.split(",", 1)[0]?.trim();
+  if (host) {
+    allowed.add(`http://${host}`);
+    allowed.add(`https://${host}`);
+  }
+  if (forwardedHost && (forwardedProto === "http" || forwardedProto === "https")) {
+    allowed.add(`${forwardedProto}://${forwardedHost}`);
+  }
+  let callback: string | undefined;
+  if (origin) {
+    try {
+      const parsed = new URL(origin);
+      if (parsed.protocol === "http:" || parsed.protocol === "https:") callback = parsed.origin;
+    } catch {
+      callback = undefined;
+    }
+  }
+  return { allowed: [...allowed], callback };
+}
+
+const reconciledSubscriptionSecretsDirs = new Set<string>();
+
 const makeWsRpcLayer = (
   currentSession: EnvironmentAuth.AuthenticatedSession,
   clientOrigin: OrchestrationClientOrigin,
   previewAutomationBroker: PreviewAutomationBroker.PreviewAutomationBroker["Service"],
+  mcpOAuthOrigins: McpOAuthClientOrigins,
 ) =>
   WsRpcGroup.toLayer(
     Effect.gen(function* () {
@@ -483,9 +527,33 @@ const makeWsRpcLayer = (
       const providerMaintenanceRunner = yield* ProviderMaintenanceRunner.ProviderMaintenanceRunner;
       const serverSelfUpdate = yield* ServerSelfUpdate.ServerSelfUpdate;
       const config = yield* ServerConfig.ServerConfig;
+      const hostEnvironment = yield* HostProcessEnvironment;
+      const hostPlatform = yield* HostProcessPlatform;
       const subscriptionAuth = SubscriptionAuthService.forSecretsDir(config.secretsDir);
+      const mcpOAuth = McpOAuthRuntime.forSecretsDir(config.secretsDir);
       const lifecycleEvents = yield* ServerLifecycleEvents.ServerLifecycleEvents;
       const serverSettings = yield* ServerSettings.ServerSettingsService;
+      const updateSubscriptionProviderSettings = (patch: ServerSettingsPatch) =>
+        serverSettings.updateSettings(patch).pipe(
+          Effect.mapError(
+            () =>
+              new SubscriptionAuthError({
+                reason: "Could not update provider availability. Try again.",
+              }),
+          ),
+        );
+      const syncConnectedSubscriptionProviders = () =>
+        updateSubscriptionProviderSettings(
+          subscriptionProviderSettingsPatch(subscriptionAuth.statuses()),
+        );
+      if (!reconciledSubscriptionSecretsDirs.has(config.secretsDir)) {
+        reconciledSubscriptionSecretsDirs.add(config.secretsDir);
+        yield* syncConnectedSubscriptionProviders().pipe(
+          Effect.tapError(() =>
+            Effect.sync(() => reconciledSubscriptionSecretsDirs.delete(config.secretsDir)),
+          ),
+        );
+      }
       const startup = yield* ServerRuntimeStartup.ServerRuntimeStartup;
       const workspaceEntries = yield* WorkspaceEntries.WorkspaceEntries;
       const workspaceFileSystem = yield* WorkspaceFileSystem.WorkspaceFileSystem;
@@ -527,7 +595,6 @@ const makeWsRpcLayer = (
       const processResourceMonitor = yield* ProcessResourceMonitor.ProcessResourceMonitor;
       const resourceTelemetry = yield* ResourceTelemetry.ResourceTelemetry;
       const usage = yield* UsageService.UsageService;
-      const relayClient = yield* RelayClient.RelayClient;
       const authorizationError = (requiredScope: AuthEnvironmentScope) =>
         new EnvironmentAuthorizationError({
           message: `The authenticated token is missing required scope: ${requiredScope}.`,
@@ -672,6 +739,14 @@ const makeWsRpcLayer = (
           case "bot.archived":
           case "bot.restored":
             return botUpsert(event.payload.botId, event.sequence);
+          case "bot.deleted":
+            return Effect.succeed(
+              Option.some({
+                kind: "bot-removed" as const,
+                sequence: event.sequence,
+                botId: event.payload.botId,
+              }),
+            );
           case "group.created":
           case "group.renamed":
           case "group.member-assigned":
@@ -1794,10 +1869,123 @@ const makeWsRpcLayer = (
               "rpc.aggregate": "server",
             },
           ),
+        [WS_METHODS.mcpAuthList]: (_input) =>
+          observeRpcEffect(
+            WS_METHODS.mcpAuthList,
+            projectionSnapshotQuery.getSnapshot().pipe(
+              Effect.map((snapshot) => ({
+                connections: mcpOAuth.statuses(snapshot.mcpServers ?? []),
+              })),
+              Effect.mapError(
+                () =>
+                  new McpAuthError({
+                    reason: "Could not read MCP connection status. Try again.",
+                  }),
+              ),
+            ),
+            { "rpc.aggregate": "server" },
+          ),
+        [WS_METHODS.mcpAuthStart]: ({ mcpServerId, redirectUrl }) =>
+          observeRpcEffect(
+            WS_METHODS.mcpAuthStart,
+            Effect.gen(function* () {
+              const snapshot = yield* projectionSnapshotQuery
+                .getSnapshot()
+                .pipe(
+                  Effect.mapError(
+                    () => new McpAuthError({ reason: "Could not read the MCP server. Try again." }),
+                  ),
+                );
+              const server = (snapshot.mcpServers ?? []).find((entry) => entry.id === mcpServerId);
+              if (!server) {
+                return yield* new McpAuthError({
+                  reason: "The MCP server is not installed in this environment.",
+                });
+              }
+              const result = yield* Effect.tryPromise({
+                try: () => mcpOAuth.start(server, redirectUrl, mcpOAuthOrigins.allowed),
+                catch: toMcpAuthError,
+              });
+              if (result.status === "connected") {
+                yield* stopAgentSessions(agentController, {
+                  logMessage: "MCP OAuth session invalidation failed",
+                  include: (session) => session.mcpServerIds?.includes(mcpServerId) === true,
+                });
+              }
+              return result;
+            }),
+            { "rpc.aggregate": "server" },
+          ),
+        [WS_METHODS.mcpAuthPoll]: ({ loginId }) =>
+          observeRpcEffect(
+            WS_METHODS.mcpAuthPoll,
+            Effect.sync(() => mcpOAuth.poll(loginId)),
+            { "rpc.aggregate": "server" },
+          ),
+        [WS_METHODS.mcpAuthComplete]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.mcpAuthComplete,
+            Effect.gen(function* () {
+              const callbackOrigin = mcpOAuthOrigins.callback;
+              if (!callbackOrigin) {
+                return yield* new McpAuthError({
+                  reason: "OAuth callback origin is missing. Start the connection again.",
+                });
+              }
+              const mcpServerId = mcpOAuth.serverIdForState(input.state);
+              const result = yield* Effect.tryPromise({
+                try: () => mcpOAuth.complete(input, callbackOrigin),
+                catch: toMcpAuthError,
+              });
+              if (result.status === "connected" && mcpServerId) {
+                yield* stopAgentSessions(agentController, {
+                  logMessage: "MCP OAuth session invalidation failed",
+                  include: (session) => session.mcpServerIds?.includes(mcpServerId) === true,
+                });
+              }
+              return result;
+            }),
+            { "rpc.aggregate": "server" },
+          ),
+        [WS_METHODS.mcpAuthCancel]: ({ loginId }) =>
+          observeRpcEffect(
+            WS_METHODS.mcpAuthCancel,
+            Effect.sync(() => {
+              mcpOAuth.cancel(loginId);
+              return {};
+            }),
+            { "rpc.aggregate": "server" },
+          ),
+        [WS_METHODS.mcpAuthDisconnect]: ({ mcpServerId }) =>
+          observeRpcEffect(
+            WS_METHODS.mcpAuthDisconnect,
+            Effect.gen(function* () {
+              mcpOAuth.disconnect(mcpServerId);
+              // Stop live sessions so no agent keeps using the removed token.
+              yield* stopAgentSessions(agentController, {
+                logMessage: "MCP OAuth session invalidation failed",
+                include: (session) => session.mcpServerIds?.includes(mcpServerId) === true,
+              });
+              return {};
+            }),
+            { "rpc.aggregate": "server" },
+          ),
         [WS_METHODS.subscriptionAuthList]: (_input) =>
           observeRpcEffect(
             WS_METHODS.subscriptionAuthList,
             Effect.sync(() => ({ providers: subscriptionAuth.statuses() })),
+            { "rpc.aggregate": "server" },
+          ),
+        [WS_METHODS.subscriptionAuthLocalClis]: (_input) =>
+          observeRpcEffect(
+            WS_METHODS.subscriptionAuthLocalClis,
+            Effect.sync(() => ({
+              providers: discoverLocalSubscriptionClis(
+                hostEnvironment.PATH ?? "",
+                hostPlatform,
+                hostEnvironment.PATHEXT,
+              ),
+            })),
             { "rpc.aggregate": "server" },
           ),
         [WS_METHODS.subscriptionAuthStart]: ({ provider }) =>
@@ -1815,24 +2003,42 @@ const makeWsRpcLayer = (
         [WS_METHODS.subscriptionAuthPoll]: ({ loginId }) =>
           observeRpcEffect(
             WS_METHODS.subscriptionAuthPoll,
-            Effect.tryPromise({
-              try: () => subscriptionAuth.pollLogin(loginId),
-              catch: (cause) =>
-                new SubscriptionAuthError({
-                  reason: cause instanceof Error ? cause.message : String(cause),
-                }),
+            Effect.gen(function* () {
+              const provider = subscriptionAuth.providerForLogin(loginId);
+              const progress = yield* Effect.tryPromise({
+                try: () => subscriptionAuth.pollLogin(loginId),
+                catch: (cause) =>
+                  new SubscriptionAuthError({
+                    reason: cause instanceof Error ? cause.message : String(cause),
+                  }),
+              });
+              if (progress.status === "connected" && provider) {
+                yield* updateSubscriptionProviderSettings(
+                  subscriptionProviderSettingsPatchFor(provider, true),
+                );
+              }
+              return progress;
             }),
             { "rpc.aggregate": "server" },
           ),
         [WS_METHODS.subscriptionAuthComplete]: ({ loginId, code }) =>
           observeRpcEffect(
             WS_METHODS.subscriptionAuthComplete,
-            Effect.tryPromise({
-              try: () => subscriptionAuth.completeLogin(loginId, code),
-              catch: (cause) =>
-                new SubscriptionAuthError({
-                  reason: cause instanceof Error ? cause.message : String(cause),
-                }),
+            Effect.gen(function* () {
+              const provider = subscriptionAuth.providerForLogin(loginId);
+              const progress = yield* Effect.tryPromise({
+                try: () => subscriptionAuth.completeLogin(loginId, code),
+                catch: (cause) =>
+                  new SubscriptionAuthError({
+                    reason: cause instanceof Error ? cause.message : String(cause),
+                  }),
+              });
+              if (progress.status === "connected" && provider) {
+                yield* updateSubscriptionProviderSettings(
+                  subscriptionProviderSettingsPatchFor(provider, true),
+                );
+              }
+              return progress;
             }),
             { "rpc.aggregate": "server" },
           ),
@@ -1848,8 +2054,18 @@ const makeWsRpcLayer = (
         [WS_METHODS.subscriptionAuthLogout]: ({ provider }) =>
           observeRpcEffect(
             WS_METHODS.subscriptionAuthLogout,
-            Effect.sync(() => {
-              subscriptionAuth.logout(provider);
+            Effect.gen(function* () {
+              yield* Effect.sync(() => subscriptionAuth.logout(provider));
+              yield* updateSubscriptionProviderSettings(
+                subscriptionProviderSettingsPatchFor(provider, false),
+              );
+              const driver = subscriptionProviderDriver(provider);
+              if (driver) {
+                yield* stopAgentSessions(agentController, {
+                  logMessage: "Subscription logout session invalidation failed",
+                  include: (session) => session.provider === driver,
+                });
+              }
               return { providers: subscriptionAuth.statuses() };
             }),
             { "rpc.aggregate": "server" },
@@ -1933,39 +2149,6 @@ const makeWsRpcLayer = (
           observeRpcEffect(WS_METHODS.serverGetBackgroundPolicy, backgroundPolicy.snapshot, {
             "rpc.aggregate": "server",
           }),
-        [WS_METHODS.cloudGetRelayClientStatus]: (_input) =>
-          observeRpcEffect(WS_METHODS.cloudGetRelayClientStatus, relayClient.resolve, {
-            "rpc.aggregate": "cloud",
-          }),
-        [WS_METHODS.cloudInstallRelayClient]: (_input) =>
-          observeRpcStream(
-            WS_METHODS.cloudInstallRelayClient,
-            Stream.callback<RelayClientInstallProgressEvent, RelayClientInstallFailedError>(
-              (queue) =>
-                relayClient
-                  .installWithProgress((event) => Queue.offer(queue, event).pipe(Effect.asVoid))
-                  .pipe(
-                    Effect.flatMap((status) =>
-                      Queue.offer(queue, {
-                        type: "complete",
-                        status,
-                      }),
-                    ),
-                    Effect.catchTag("RelayClientInstallError", (error) =>
-                      Queue.fail(
-                        queue,
-                        new RelayClientInstallFailedError({
-                          reason: error.reason,
-                          message: error.message,
-                        }),
-                      ),
-                    ),
-                    Effect.andThen(Queue.end(queue)),
-                    Effect.forkScoped,
-                  ),
-            ),
-            { "rpc.aggregate": "cloud" },
-          ),
         [WS_METHODS.sourceControlLookupRepository]: (input) =>
           observeRpcEffect(
             WS_METHODS.sourceControlLookupRepository,
@@ -2566,6 +2749,7 @@ export const websocketRpcRouteLayer = Layer.unwrap(
           ),
         );
         const clientOrigin = readClientConnectionOrigin(request);
+        const mcpOAuthOrigins = resolveMcpOAuthClientOrigins(request);
         yield* sessions.recordClientConnection(session.sessionId, clientOrigin);
         yield* analytics.record("client.connected", {
           ...clientOriginAnalyticsProps(clientOrigin),
@@ -2575,7 +2759,7 @@ export const websocketRpcRouteLayer = Layer.unwrap(
           disableTracing: true,
         }).pipe(
           Effect.provide(
-            makeWsRpcLayer(session, clientOrigin, previewAutomationBroker).pipe(
+            makeWsRpcLayer(session, clientOrigin, previewAutomationBroker, mcpOAuthOrigins).pipe(
               Layer.provideMerge(RpcSerialization.layerJson),
               Layer.provide(ProviderMaintenanceRunner.layer),
               Layer.provide(Layer.succeed(ServerSelfUpdate.ServerSelfUpdate, serverSelfUpdate)),

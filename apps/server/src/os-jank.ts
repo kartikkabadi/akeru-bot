@@ -1,4 +1,4 @@
-import { PRODUCT_HOME_DIRNAME } from "@t3tools/shared/devHome";
+import { AKERU_HOME_DIRNAME } from "@t3tools/shared/devHome";
 import { HostProcessEnvironment, HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import {
   listLoginShellCandidates,
@@ -106,7 +106,7 @@ export const expandHomePath = Effect.fn(function* (input: string) {
 export const resolveBaseDir = Effect.fn(function* (raw: string | undefined) {
   const { join, resolve } = yield* Path.Path;
   if (!raw || raw.trim().length === 0) {
-    return join(NodeOS.homedir(), PRODUCT_HOME_DIRNAME);
+    return join(NodeOS.homedir(), AKERU_HOME_DIRNAME);
   }
   return resolve(yield* expandHomePath(raw.trim()));
 });
