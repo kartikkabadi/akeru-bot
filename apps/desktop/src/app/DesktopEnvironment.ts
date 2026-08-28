@@ -159,7 +159,7 @@ const make = Effect.fn("desktop.environment.make")(function* (
   const baseDir = resolveDesktopBaseDir({
     homeDirectory,
     joinPath: path.join,
-    t3Home: config.t3Home,
+    akeruHome: config.akeruHome,
   });
   const rootDir = path.resolve(input.dirname, "../../..");
   const appRoot = input.isPackaged ? input.appPath : rootDir;
@@ -176,7 +176,7 @@ const make = Effect.fn("desktop.environment.make")(function* (
     baseDir,
     isDevelopment,
     joinPath: path.join,
-    t3Home: config.t3Home,
+    akeruHome: config.akeruHome,
   });
   const userDataDirName = isDevelopment ? "akeru-bot-dev" : "akeru-bot";
   const legacyUserDataDirName = isDevelopment ? "Akeru Bot (Dev)" : "Akeru Bot (Alpha)";

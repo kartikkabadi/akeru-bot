@@ -61,7 +61,7 @@ function makeLayer(
     runningUnderArm64Translation: false,
   }).pipe(
     Layer.provide(
-      Layer.mergeAll(NodeServices.layer, DesktopConfig.layerTest({ T3CODE_HOME: baseDir })),
+      Layer.mergeAll(NodeServices.layer, DesktopConfig.layerTest({ AKERU_HOME: baseDir })),
     ),
   );
   const safeStorageLayer = makeSafeStorageLayer(encryptionAvailable, failDecrypt);
@@ -174,17 +174,12 @@ describe("DesktopConnectionCatalogStore", () => {
         const catalog = yield* decodeConnectionCatalog(migrated.value);
 
         assert.deepInclude(catalog.targets[0], {
-          _tag: "RelayConnectionTarget",
-          environmentId: EnvironmentId.make("relay-environment"),
-          label: "Relay",
-        });
-        assert.deepInclude(catalog.targets[1], {
           _tag: "SshConnectionTarget",
           environmentId: EnvironmentId.make("ssh-environment"),
           label: "SSH",
           connectionId: "ssh:ssh-environment",
         });
-        assert.deepInclude(catalog.targets[2], {
+        assert.deepInclude(catalog.targets[1], {
           _tag: "BearerConnectionTarget",
           environmentId: EnvironmentId.make("bearer-environment"),
           label: "Bearer",

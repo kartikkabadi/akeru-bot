@@ -16,7 +16,7 @@ describe("electron development launcher", () => {
       environment: {
         VITE_DEV_SERVER_URL: "http://127.0.0.1:8526",
         T3CODE_PORT: "16566",
-        T3CODE_HOME: "/tmp/t3",
+        AKERU_HOME: "/tmp/t3",
       },
     });
 
