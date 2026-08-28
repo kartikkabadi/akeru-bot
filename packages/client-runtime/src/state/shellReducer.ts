@@ -34,6 +34,22 @@ export function applyShellStreamEvent(
         : Arr.append(snapshot.bots, event.bot);
       return { ...snapshot, bots, snapshotSequence: event.sequence };
     }
+    case "bot-removed":
+      return {
+        ...snapshot,
+        bots: Arr.filter(snapshot.bots, (bot) => bot.id !== event.botId),
+        groups: Arr.map(snapshot.groups, (group) =>
+          group.bossBotId === event.botId ||
+          group.members.some((member) => member.botId === event.botId)
+            ? {
+                ...group,
+                bossBotId: group.bossBotId === event.botId ? null : group.bossBotId,
+                members: Arr.filter(group.members, (member) => member.botId !== event.botId),
+              }
+            : group,
+        ),
+        snapshotSequence: event.sequence,
+      };
     case "group-upserted": {
       const groups = snapshot.groups.some((group) => group.id === event.group.id)
         ? Arr.map(snapshot.groups, (group) => (group.id === event.group.id ? event.group : group))

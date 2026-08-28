@@ -1,16 +1,13 @@
 /**
- * Where development state lives, and how to keep it away from T3 Code's
- * `~/.t3` and from this product's live `~/.akeru`.
+ * Where Akeru Bot development state lives.
  *
- * A linked git worktree gets its own (gitignored) `.akeru`: feature work in a
- * throwaway branch must not share a database with the real app, and an ambient
- * `T3CODE_HOME` or `AKERU_HOME` counts as an explicit base dir — flipping the
- * state directory from `<base>/dev` to `<base>/userdata`, the live production
- * database.
+ * A linked git worktree gets its own gitignored `.akeru`, so feature work does
+ * not share a database with the live app. An ambient `AKERU_HOME` counts as an
+ * explicit base directory and stores runtime state under `<base>/userdata`.
  */
 
-/** Product data directory name. Separate from T3 Code's `.t3`. */
-export const PRODUCT_HOME_DIRNAME = ".akeru";
+/** Product data directory name. */
+export const AKERU_HOME_DIRNAME = ".akeru";
 
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -94,7 +91,7 @@ export const resolveGitWorktreePath = (
  * worktree. Deliberately does not require the directory to exist yet: falling
  * back because it is missing would send callers at the shared home.
  */
-export const resolveWorktreeT3Home = (
+export const resolveWorktreeAkeruHome = (
   cwd: string,
 ): Effect.Effect<string | undefined, never, FileSystem.FileSystem | Path.Path> =>
   Effect.gen(function* () {
@@ -103,5 +100,5 @@ export const resolveWorktreeT3Home = (
       return undefined;
     }
     const path = yield* Path.Path;
-    return path.join(worktreePath, PRODUCT_HOME_DIRNAME);
+    return path.join(worktreePath, AKERU_HOME_DIRNAME);
   });

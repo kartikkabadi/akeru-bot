@@ -100,17 +100,20 @@ function commandArgs(command: ChildProcess.Command): ReadonlyArray<string> {
 }
 
 describe("ssh tunnel scripts", () => {
-  it("builds the remote t3 runner with npx and npm fallbacks", () => {
+  it("builds the remote Akeru runner with npx and npm fallbacks", () => {
     const script = buildRemoteT3RunnerScript({ nodeEngineRange: TEST_NODE_ENGINE_RANGE });
 
     assert.include(script, "T3_NODE_SCRIPT_PATH=''");
-    assert.include(script, 'exec t3 "$@"');
-    assert.include(script, "exec npx --yes 't3@latest' \"$@\"");
-    assert.include(script, "exec npm exec --yes 't3@latest' -- \"$@\"");
-    assert.include(script, "could not install 't3@latest'");
-    assert.include(script, "require_installed_t3_cli npx --yes --package 't3@latest'");
-    assert.include(script, "require_installed_t3_cli npm exec --yes --package 't3@latest'");
-    assert.include(script, "npm produced no t3 executable");
+    assert.include(script, 'exec akeru "$@"');
+    assert.include(script, "exec npx --yes 'akeru-bot@latest' \"$@\"");
+    assert.include(script, "exec npm exec --yes 'akeru-bot@latest' -- \"$@\"");
+    assert.include(script, "could not install 'akeru-bot@latest'");
+    assert.include(script, "require_installed_akeru_cli npx --yes --package 'akeru-bot@latest'");
+    assert.include(
+      script,
+      "require_installed_akeru_cli npm exec --yes --package 'akeru-bot@latest'",
+    );
+    assert.include(script, "npm produced no akeru executable");
     assert.include(script, 'prepend_path_if_dir "$HOME/.local/bin"');
     assert.include(script, `T3_NODE_ENGINE_RANGE='${TEST_NODE_ENGINE_RANGE}'`);
     assert.include(script, "remote_node_satisfies_engine()");
@@ -136,18 +139,21 @@ describe("ssh tunnel scripts", () => {
     assert.notInclude(script, TEST_NODE_ENGINE_RANGE);
   });
 
-  it("shell-quotes package specs in the remote t3 runner", () => {
+  it("shell-quotes package specs in the remote Akeru runner", () => {
     const script = buildRemoteT3RunnerScript({
-      packageSpec: "t3@nightly; touch /tmp/t3-owned",
+      packageSpec: "akeru-bot@nightly; touch /tmp/akeru-owned",
     });
 
-    assert.include(script, "exec npx --yes 't3@nightly; touch /tmp/t3-owned' \"$@\"");
-    assert.include(script, "exec npm exec --yes 't3@nightly; touch /tmp/t3-owned' -- \"$@\"");
+    assert.include(script, "exec npx --yes 'akeru-bot@nightly; touch /tmp/akeru-owned' \"$@\"");
     assert.include(
       script,
-      "require_installed_t3_cli npx --yes --package 't3@nightly; touch /tmp/t3-owned'",
+      "exec npm exec --yes 'akeru-bot@nightly; touch /tmp/akeru-owned' -- \"$@\"",
     );
-    assert.notInclude(script, "exec npx --yes t3@nightly; touch /tmp/t3-owned");
+    assert.include(
+      script,
+      "require_installed_akeru_cli npx --yes --package 'akeru-bot@nightly; touch /tmp/akeru-owned'",
+    );
+    assert.notInclude(script, "exec npx --yes akeru-bot@nightly; touch /tmp/akeru-owned");
   });
 
   it("builds the remote t3 runner with a node script override", () => {
@@ -188,20 +194,26 @@ describe("ssh tunnel scripts", () => {
     assert.include(buildRemoteLaunchScript(), 'kill "$REMOTE_PID" 2>/dev/null || true');
     assert.include(buildRemoteLaunchScript(), "wait_ready");
     assert.include(buildRemoteLaunchScript(), '"$RUNNER_FILE" serve --host 127.0.0.1');
-    assert.include(buildRemoteLaunchScript(), '--base-dir "$DEFAULT_SERVER_HOME"');
+    assert.include(buildRemoteLaunchScript(), '--base-dir "$DEFAULT_AKERU_HOME"');
     assert.notInclude(buildRemoteLaunchScript(), "server-home");
     assert.include(buildRemoteLaunchScript(), "Remote T3 server did not become ready");
     assert.include(buildRemoteLaunchScript(), 'wait_ready "60000"');
     assert.include(buildRemoteLaunchScript(), 'if [ -s "$LOG_FILE" ]; then');
     assert.include(buildRemoteLaunchScript(), "It wrote nothing to %s");
-    assert.include(buildRemoteLaunchScript({ packageSpec: "t3@nightly" }), "t3@nightly");
+    assert.include(
+      buildRemoteLaunchScript({ packageSpec: "akeru-bot@nightly" }),
+      "akeru-bot@nightly",
+    );
     assert.include(
       buildRemotePairingScript(target),
       '"$RUNNER_FILE" auth pairing create --base-dir "$PAIRING_BASE_DIR" --json',
     );
-    assert.include(buildRemotePairingScript(target), 'PAIRING_BASE_DIR="$DEFAULT_SERVER_HOME"');
+    assert.include(buildRemotePairingScript(target), 'PAIRING_BASE_DIR="$DEFAULT_AKERU_HOME"');
     assert.notInclude(buildRemotePairingScript(target), "server-home");
-    assert.include(buildRemotePairingScript(target, { packageSpec: "t3@nightly" }), "t3@nightly");
+    assert.include(
+      buildRemotePairingScript(target, { packageSpec: "akeru-bot@nightly" }),
+      "akeru-bot@nightly",
+    );
     assert.include(
       buildRemoteStopScript(target),
       'if [ "$REMOTE_MANAGED" != "external" ] && [ -n "$REMOTE_PID" ]',
@@ -210,7 +222,7 @@ describe("ssh tunnel scripts", () => {
     assert.include(buildRemoteStopScript(target), 'rm -f "$PID_FILE" "$PORT_FILE" "$MANAGED_FILE"');
     assert.include(
       buildRemoteLaunchScript(),
-      'DEFAULT_RUNTIME_FILE="$DEFAULT_SERVER_HOME/userdata/server-runtime.json"',
+      'DEFAULT_RUNTIME_FILE="$DEFAULT_AKERU_HOME/userdata/server-runtime.json"',
     );
     assert.include(buildRemoteLaunchScript(), "resolve_default_runtime_port()");
     assert.include(

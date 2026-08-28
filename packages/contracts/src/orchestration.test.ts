@@ -61,6 +61,25 @@ const decodeOrchestrationEvent = Schema.decodeUnknownEffect(OrchestrationEvent);
 const decodeThreadMetaUpdatedPayload = Schema.decodeUnknownEffect(ThreadMetaUpdatedPayload);
 const decodeDispatchCommandError = Schema.decodeUnknownEffect(OrchestrationDispatchCommandError);
 
+it.effect("preserves hosted MCP authentication on create commands", () =>
+  Effect.gen(function* () {
+    const command = yield* decodeOrchestrationCommand({
+      type: "mcp-server.create",
+      commandId: "cmd-context-create",
+      mcpServerId: "builtin-context",
+      name: "Context.dev",
+      transport: "url",
+      url: "https://mcp.context.dev/mcp",
+      authentication: "oauth",
+      createdAt: "2026-08-27T00:00:00.000Z",
+    });
+    assert.equal(command.type, "mcp-server.create");
+    if (command.type === "mcp-server.create" && command.transport === "url") {
+      assert.equal(command.authentication, "oauth");
+    }
+  }),
+);
+
 it.effect("decodes every bot avatar variant", () =>
   Effect.gen(function* () {
     assert.deepEqual(
@@ -483,6 +502,32 @@ it.effect("decodes exclusive thread ownership", () =>
       decodeOrchestrationCommand({ ...base, botId: "bot-1", groupId: "group-1" }),
     );
     assert.equal(invalid._tag, "Failure");
+  }),
+);
+
+it.effect("decodes bot delete commands and events", () =>
+  Effect.gen(function* () {
+    const command = yield* decodeOrchestrationCommand({
+      type: "bot.delete",
+      commandId: "cmd-delete-bot-1",
+      botId: "bot-1",
+    });
+    const event = yield* decodeOrchestrationEvent({
+      sequence: 1,
+      eventId: "event-delete-bot-1",
+      aggregateKind: "bot",
+      aggregateId: "bot-1",
+      type: "bot.deleted",
+      occurredAt: "2026-01-01T00:00:00.000Z",
+      commandId: "cmd-delete-bot-1",
+      causationEventId: null,
+      correlationId: "cmd-delete-bot-1",
+      metadata: {},
+      payload: { botId: "bot-1", deletedAt: "2026-01-01T00:00:00.000Z" },
+    });
+
+    assert.strictEqual(command.type, "bot.delete");
+    assert.strictEqual(event.type, "bot.deleted");
   }),
 );
 

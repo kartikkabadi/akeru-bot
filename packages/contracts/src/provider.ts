@@ -66,9 +66,29 @@ export const ProviderSessionStartInput = Schema.Struct({
   sandboxMode: Schema.optional(ProviderSandboxMode),
   botSandbox: Schema.optional(Schema.NullOr(BotSandbox)),
   mcpServers: Schema.optional(Schema.Array(McpServer)),
+  /**
+   * Server-only, transient bearer headers for the MCP registrations above.
+   * Provider session setup must not persist or return this map.
+   */
+  mcpServerAuthorizationHeaders: Schema.optional(Schema.Record(McpServerId, Schema.String)),
   runtimeMode: RuntimeMode,
 });
 export type ProviderSessionStartInput = typeof ProviderSessionStartInput.Type;
+
+export const ProviderConversationMessage = Schema.Struct({
+  id: TrimmedNonEmptyString,
+  role: Schema.Literals(["user", "assistant"]),
+  text: Schema.String,
+  createdAt: IsoDateTime,
+});
+export type ProviderConversationMessage = typeof ProviderConversationMessage.Type;
+
+export const ProviderConversationContext = Schema.Struct({
+  resourceId: TrimmedNonEmptyString,
+  threadId: ThreadId,
+  messages: Schema.Array(ProviderConversationMessage),
+});
+export type ProviderConversationContext = typeof ProviderConversationContext.Type;
 
 export const ProviderSendTurnInput = Schema.Struct({
   threadId: ThreadId,
@@ -80,6 +100,7 @@ export const ProviderSendTurnInput = Schema.Struct({
   ),
   modelSelection: Schema.optional(ModelSelection),
   interactionMode: Schema.optional(ProviderInteractionMode),
+  conversationContext: Schema.optional(ProviderConversationContext),
 });
 export type ProviderSendTurnInput = typeof ProviderSendTurnInput.Type;
 

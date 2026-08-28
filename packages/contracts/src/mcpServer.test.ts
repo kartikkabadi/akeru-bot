@@ -56,6 +56,22 @@ describe("McpServerConfiguration", () => {
     },
   );
 
+  it("records hosted OAuth requirements without storing credentials", () => {
+    expect(
+      decodeConfiguration({
+        name: "Context.dev",
+        transport: "url",
+        url: "https://mcp.context.dev/mcp",
+        authentication: "oauth",
+      }),
+    ).toEqual({
+      name: "Context.dev",
+      transport: "url",
+      url: "https://mcp.context.dev/mcp",
+      authentication: "oauth",
+    });
+  });
+
   it.each(["mcp.example.com", "ftp://mcp.example.com", "not a url"])(
     "rejects the non-HTTP URL %s",
     (url) => {

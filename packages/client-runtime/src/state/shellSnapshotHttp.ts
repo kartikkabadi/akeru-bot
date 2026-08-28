@@ -8,7 +8,6 @@ import { HttpClient } from "effect/unstable/http";
 
 import type { PreparedConnection } from "../connection/model.ts";
 import { environmentEndpointUrl } from "../environment/endpoint.ts";
-import { ManagedRelayDpopSigner } from "../relay/managedRelay.ts";
 import { executeEnvironmentHttpRequest, makeEnvironmentHttpApiClient } from "../rpc/http.ts";
 import { buildEnvironmentAuthHeaders, withEnvironmentCredentials } from "./environmentHttpAuth.ts";
 
@@ -26,7 +25,7 @@ export const fetchEnvironmentShellSnapshot = Effect.fn(
   "clientRuntime.state.fetchEnvironmentShellSnapshot",
 )(function* (input: {
   readonly prepared: PreparedConnection;
-  readonly signer: Option.Option<ManagedRelayDpopSigner["Service"]>;
+  readonly signer: Option.Option<unknown>;
   readonly timeoutMs?: number;
 }) {
   const requestUrl = environmentEndpointUrl(input.prepared.httpBaseUrl, "/api/orchestration/shell");
@@ -72,7 +71,7 @@ export const shellSnapshotLoaderLayer: Layer.Layer<
     const httpClient = yield* HttpClient.HttpClient;
     // Resolve the DPoP signer optionally: it is only needed for relay/DPoP
     // connections, so the loader must not hard-require it.
-    const signer = yield* Effect.serviceOption(ManagedRelayDpopSigner);
+    const signer = Option.none();
     return ShellSnapshotLoader.of({
       load: (prepared: PreparedConnection) =>
         fetchEnvironmentShellSnapshot({ prepared, signer }).pipe(

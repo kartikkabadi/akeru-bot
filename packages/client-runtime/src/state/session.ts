@@ -10,7 +10,6 @@ import { EnvironmentRegistry } from "../connection/registry.ts";
 import type { PreparedConnection } from "../connection/model.ts";
 import { EnvironmentSupervisor } from "../connection/supervisor.ts";
 import { environmentEndpointUrl } from "../environment/endpoint.ts";
-import { ManagedRelayDpopSigner } from "../relay/managedRelay.ts";
 import { safeErrorLogAttributes } from "../errors/safeLog.ts";
 import { executeEnvironmentHttpRequest, makeEnvironmentHttpApiClient } from "../rpc/http.ts";
 import { buildEnvironmentAuthHeaders, withEnvironmentCredentials } from "./environmentHttpAuth.ts";
@@ -43,7 +42,7 @@ export const fetchEnvironmentSessionState = Effect.fn(
   "clientRuntime.state.fetchEnvironmentSessionState",
 )(function* (input: {
   readonly prepared: PreparedConnection;
-  readonly signer: Option.Option<ManagedRelayDpopSigner["Service"]>;
+  readonly signer: Option.Option<unknown>;
   readonly timeoutMs?: number;
 }) {
   const requestUrl = environmentEndpointUrl(input.prepared.httpBaseUrl, "/api/auth/session");
@@ -133,7 +132,7 @@ export function createEnvironmentSessionAtoms<R, E>(
           return Effect.never;
         }
         return Effect.gen(function* () {
-          const signer = yield* Effect.serviceOption(ManagedRelayDpopSigner);
+          const signer = Option.none();
           return yield* fetchEnvironmentSessionState({ prepared, signer });
         });
       })

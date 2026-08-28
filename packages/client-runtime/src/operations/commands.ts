@@ -35,6 +35,7 @@ export type CreateBotInput = CommandInput<"bot.create">;
 export type UpdateBotInput = CommandInput<"bot.update">;
 export type ArchiveBotInput = CommandInput<"bot.archive">;
 export type RestoreBotInput = CommandInput<"bot.restore">;
+export type DeleteBotInput = CommandInput<"bot.delete">;
 export type CreateGroupInput = CommandInput<"group.create">;
 export type RenameGroupInput = CommandInput<"group.rename">;
 export type DeleteGroupInput = CommandInput<"group.delete">;
@@ -229,6 +230,16 @@ export const restoreBot: (input: RestoreBotInput) => CommandEffect = Effect.fn(
   return yield* dispatch({
     ...input,
     type: "bot.restore",
+    commandId: yield* commandId(input),
+  });
+});
+
+export const deleteBot: (input: DeleteBotInput) => CommandEffect = Effect.fn(
+  "EnvironmentCommands.deleteBot",
+)(function* (input) {
+  return yield* dispatch({
+    ...input,
+    type: "bot.delete",
     commandId: yield* commandId(input),
   });
 });

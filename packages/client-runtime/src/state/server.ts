@@ -83,7 +83,7 @@ export class ServerUpdateResumeTimeoutError extends Schema.TaggedErrorClass<Serv
   },
 ) {
   override get message(): string {
-    return `The server did not resume on t3@${this.targetVersion}.`;
+    return `The server did not resume on akeru-bot@${this.targetVersion}.`;
   }
 }
 
@@ -94,7 +94,7 @@ export class ServerUpdateProgressIncompleteError extends Schema.TaggedErrorClass
   },
 ) {
   override get message(): string {
-    return `The t3@${this.targetVersion} update ended before the server accepted the restart.`;
+    return `The akeru-bot@${this.targetVersion} update ended before the server accepted the restart.`;
   }
 }
 
@@ -107,7 +107,7 @@ export class ServerUpdateTerminalError extends Schema.TaggedErrorClass<ServerUpd
   },
 ) {
   override get message(): string {
-    return this.reason ?? `The t3@${this.targetVersion} update ${this.status}.`;
+    return this.reason ?? `The akeru-bot@${this.targetVersion} update ${this.status}.`;
   }
 }
 
@@ -733,6 +733,17 @@ export function createServerEnvironmentAtoms<R, E>(
       tag: WS_METHODS.subscriptionAuthList,
       staleTimeMs: 5_000,
     }),
+    localSubscriptionClis: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:server:local-subscription-clis",
+      tag: WS_METHODS.subscriptionAuthLocalClis,
+      staleTimeMs: 5_000,
+    }),
+    mcpAuth: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:server:mcp-auth",
+      tag: WS_METHODS.mcpAuthList,
+      staleTimeMs: 1_000,
+      refreshIntervalMs: 1_000,
+    }),
     configProjection,
     welcome: createEnvironmentRpcSubscriptionAtomFamily(runtime, {
       label: "environment-data:server:welcome",
@@ -774,6 +785,26 @@ export function createServerEnvironmentAtoms<R, E>(
       tag: WS_METHODS.serverUpdateSettings,
       scheduler: configScheduler,
       concurrency: configConcurrency,
+    }),
+    startMcpAuth: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:mcp-auth:start",
+      tag: WS_METHODS.mcpAuthStart,
+    }),
+    pollMcpAuth: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:mcp-auth:poll",
+      tag: WS_METHODS.mcpAuthPoll,
+    }),
+    completeMcpAuth: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:mcp-auth:complete",
+      tag: WS_METHODS.mcpAuthComplete,
+    }),
+    cancelMcpAuth: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:mcp-auth:cancel",
+      tag: WS_METHODS.mcpAuthCancel,
+    }),
+    disconnectMcpAuth: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:mcp-auth:disconnect",
+      tag: WS_METHODS.mcpAuthDisconnect,
     }),
     startSubscriptionAuth: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:server:subscription-auth:start",

@@ -8,6 +8,9 @@ export type McpServerId = typeof McpServerId.Type;
 export const McpServerTransport = Schema.Literals(["stdio", "url"]);
 export type McpServerTransport = typeof McpServerTransport.Type;
 
+export const McpServerAuthentication = Schema.Literals(["none", "oauth", "optional-oauth"]);
+export type McpServerAuthentication = typeof McpServerAuthentication.Type;
+
 export const McpServerUrl = TrimmedNonEmptyString.check(
   Schema.makeFilter((value) => {
     if (!/^https?:\/\//i.test(value)) {
@@ -41,6 +44,7 @@ const UrlMcpServerConfiguration = Schema.Struct({
   name: TrimmedNonEmptyString,
   transport: Schema.Literal("url"),
   url: McpServerUrl,
+  authentication: Schema.optional(McpServerAuthentication),
 });
 
 export const McpServerConfiguration = Schema.Union([
@@ -50,7 +54,7 @@ export const McpServerConfiguration = Schema.Union([
 export type McpServerConfiguration = typeof McpServerConfiguration.Type;
 
 /**
- * A workspace-level raw MCP server registration. Runtime launch, Mastra tool
+ * A workspace-level raw MCP server registration. Runtime launch, agent tool
  * attachment, Executor, Composio, and per-bot enablement are outside this registry.
  * Credentials stay in external secret storage and never belong in this record.
  */

@@ -8,7 +8,6 @@ import { HttpClient } from "effect/unstable/http";
 
 import type { PreparedConnection } from "../connection/model.ts";
 import { environmentEndpointUrl } from "../environment/endpoint.ts";
-import { ManagedRelayDpopSigner } from "../relay/managedRelay.ts";
 import {
   executeEnvironmentHttpRequest,
   makeEnvironmentHttpApiClient,
@@ -41,7 +40,7 @@ export const fetchEnvironmentThreadSnapshot = Effect.fn(
 )(function* (input: {
   readonly prepared: PreparedConnection;
   readonly threadId: ThreadId;
-  readonly signer: Option.Option<ManagedRelayDpopSigner["Service"]>;
+  readonly signer: Option.Option<unknown>;
   readonly timeoutMs?: number;
   readonly window?: ThreadSnapshotWindow;
 }) {
@@ -105,7 +104,7 @@ export const threadSnapshotLoaderLayer: Layer.Layer<
     // Resolve the DPoP signer optionally: it is only needed for relay/DPoP
     // connections, so the loader must not hard-require it (bearer/primary
     // connections work without one).
-    const signer = yield* Effect.serviceOption(ManagedRelayDpopSigner);
+    const signer = Option.none();
     return ThreadSnapshotLoader.of({
       load: (prepared: PreparedConnection, threadId: ThreadId, window?: ThreadSnapshotWindow) =>
         fetchEnvironmentThreadSnapshot({

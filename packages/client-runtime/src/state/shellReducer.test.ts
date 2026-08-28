@@ -47,6 +47,9 @@ const stubBot = {
   id: BotId.make("bot-1"),
   name: "Builder",
   title: "Backend engineer",
+  label: null,
+  description: null,
+  disabledMcpServerIds: [],
   avatar: { kind: "dither" as const, seed: "builder" },
   engine: null,
   sandbox: "local" as const,
@@ -216,6 +219,19 @@ describe("applyShellStreamEvent", () => {
       expect(updated.bots).toHaveLength(1);
       expect(updated.bots[0]?.name).toBe("Pathfinder");
       expect(updated.snapshotSequence).toBe(5);
+    });
+  });
+
+  describe("bot-removed", () => {
+    it("removes a bot and its stale group membership by id", () => {
+      const next = applyShellStreamEvent(
+        { ...baseSnapshot, bots: [stubBot], groups: [stubGroup] },
+        { kind: "bot-removed", sequence: 6, botId: stubBot.id },
+      );
+
+      expect(next.bots).toEqual([]);
+      expect(next.groups[0]).toMatchObject({ bossBotId: null, members: [] });
+      expect(next.snapshotSequence).toBe(6);
     });
   });
 

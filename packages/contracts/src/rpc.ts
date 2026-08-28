@@ -81,11 +81,6 @@ import {
 } from "./provider.ts";
 import { ProviderInstanceId } from "./providerInstance.ts";
 import {
-  RelayClientInstallFailedError,
-  RelayClientInstallProgressEventSchema,
-  RelayClientStatusSchema,
-} from "./relayClient.ts";
-import {
   ProjectListEntriesError,
   ProjectListEntriesInput,
   ProjectListEntriesResult,
@@ -167,6 +162,16 @@ import {
   ResourceTelemetrySnapshot,
 } from "./resourceTelemetry.ts";
 import { UsageReadError, UsageSummary, UsageSummaryInput } from "./usage.ts";
+import {
+  MCP_AUTH_WS_METHODS,
+  WsMcpAuthCancelRpc,
+  WsMcpAuthCompleteRpc,
+  WsMcpAuthDisconnectRpc,
+  WsMcpAuthListRpc,
+  WsMcpAuthPollRpc,
+  WsMcpAuthStartRpc,
+} from "./mcpAuth.ts";
+import { LocalSubscriptionCliStatuses } from "./localSubscriptionCli.ts";
 import { ServerSettings, ServerSettingsError, ServerSettingsPatch } from "./settings.ts";
 import {
   SubscriptionAuthCompleteInput,
@@ -265,11 +270,13 @@ export const WS_METHODS = {
   serverGetSettings: "server.getSettings",
   serverUpdateSettings: "server.updateSettings",
   subscriptionAuthList: "subscriptionAuth.list",
+  subscriptionAuthLocalClis: "subscriptionAuth.localClis",
   subscriptionAuthStart: "subscriptionAuth.start",
   subscriptionAuthPoll: "subscriptionAuth.poll",
   subscriptionAuthComplete: "subscriptionAuth.complete",
   subscriptionAuthCancel: "subscriptionAuth.cancel",
   subscriptionAuthLogout: "subscriptionAuth.logout",
+  ...MCP_AUTH_WS_METHODS,
   serverDiscoverSourceControl: "server.discoverSourceControl",
   serverGetTraceDiagnostics: "server.getTraceDiagnostics",
   serverGetProcessDiagnostics: "server.getProcessDiagnostics",
@@ -281,10 +288,6 @@ export const WS_METHODS = {
   serverReportHostPowerState: "server.reportHostPowerState",
   serverGetBackgroundPolicy: "server.getBackgroundPolicy",
   serverGetUsageSummary: "server.getUsageSummary",
-
-  // Cloud environment methods
-  cloudGetRelayClientStatus: "cloud.getRelayClientStatus",
-  cloudInstallRelayClient: "cloud.installRelayClient",
 
   // Source control methods
   sourceControlLookupRepository: "sourceControl.lookupRepository",
@@ -382,6 +385,12 @@ export const WsSubscriptionAuthListRpc = Rpc.make(WS_METHODS.subscriptionAuthLis
   error: Schema.Union([SubscriptionAuthError, EnvironmentAuthorizationError]),
 });
 
+export const WsSubscriptionAuthLocalClisRpc = Rpc.make(WS_METHODS.subscriptionAuthLocalClis, {
+  payload: Schema.Struct({}),
+  success: LocalSubscriptionCliStatuses,
+  error: EnvironmentAuthorizationError,
+});
+
 export const WsSubscriptionAuthStartRpc = Rpc.make(WS_METHODS.subscriptionAuthStart, {
   payload: SubscriptionAuthStartInput,
   success: SubscriptionAuthStartResult,
@@ -464,19 +473,6 @@ export const WsServerSignalProcessRpc = Rpc.make(WS_METHODS.serverSignalProcess,
   payload: ServerSignalProcessInput,
   success: ServerSignalProcessResult,
   error: EnvironmentAuthorizationError,
-});
-
-export const WsCloudGetRelayClientStatusRpc = Rpc.make(WS_METHODS.cloudGetRelayClientStatus, {
-  payload: Schema.Struct({}),
-  success: RelayClientStatusSchema,
-  error: EnvironmentAuthorizationError,
-});
-
-export const WsCloudInstallRelayClientRpc = Rpc.make(WS_METHODS.cloudInstallRelayClient, {
-  payload: Schema.Struct({}),
-  success: RelayClientInstallProgressEventSchema,
-  error: Schema.Union([RelayClientInstallFailedError, EnvironmentAuthorizationError]),
-  stream: true,
 });
 
 export const WsServerReportClientActivityRpc = Rpc.make(WS_METHODS.serverReportClientActivity, {
@@ -912,11 +908,18 @@ export const WsRpcGroup = RpcGroup.make(
   WsServerGetSettingsRpc,
   WsServerUpdateSettingsRpc,
   WsSubscriptionAuthListRpc,
+  WsSubscriptionAuthLocalClisRpc,
   WsSubscriptionAuthStartRpc,
   WsSubscriptionAuthPollRpc,
   WsSubscriptionAuthCompleteRpc,
   WsSubscriptionAuthCancelRpc,
   WsSubscriptionAuthLogoutRpc,
+  WsMcpAuthListRpc,
+  WsMcpAuthStartRpc,
+  WsMcpAuthPollRpc,
+  WsMcpAuthCompleteRpc,
+  WsMcpAuthCancelRpc,
+  WsMcpAuthDisconnectRpc,
   WsServerDiscoverSourceControlRpc,
   WsServerGetTraceDiagnosticsRpc,
   WsServerGetProcessDiagnosticsRpc,
@@ -928,8 +931,6 @@ export const WsRpcGroup = RpcGroup.make(
   WsServerReportClientActivityRpc,
   WsServerReportHostPowerStateRpc,
   WsServerGetBackgroundPolicyRpc,
-  WsCloudGetRelayClientStatusRpc,
-  WsCloudInstallRelayClientRpc,
   WsSourceControlLookupRepositoryRpc,
   WsSourceControlCloneRepositoryRpc,
   WsSourceControlPublishRepositoryRpc,

@@ -25,7 +25,7 @@ import {
   TurnId,
 } from "./baseSchemas.ts";
 import { ProviderInstanceId } from "./providerInstance.ts";
-import { McpServer, McpServerId, McpServerUrl } from "./mcpServer.ts";
+import { McpServer, McpServerAuthentication, McpServerId, McpServerUrl } from "./mcpServer.ts";
 
 export const ORCHESTRATION_WS_METHODS = {
   dispatchCommand: "orchestration.dispatchCommand",
@@ -655,6 +655,11 @@ export const OrchestrationShellStreamEvent = Schema.Union([
     bot: OrchestrationBot,
   }),
   Schema.Struct({
+    kind: Schema.Literal("bot-removed"),
+    sequence: NonNegativeInt,
+    botId: BotId,
+  }),
+  Schema.Struct({
     kind: Schema.Literal("group-upserted"),
     sequence: NonNegativeInt,
     group: OrchestrationGroup,
@@ -869,6 +874,12 @@ const BotRestoreCommand = Schema.Struct({
   botId: BotId,
 });
 
+const BotDeleteCommand = Schema.Struct({
+  type: Schema.Literal("bot.delete"),
+  commandId: CommandId,
+  botId: BotId,
+});
+
 const GroupCreateCommand = Schema.Struct({
   type: Schema.Literal("group.create"),
   commandId: CommandId,
@@ -937,6 +948,7 @@ const McpServerCreateCommand = Schema.Union([
     name: TrimmedNonEmptyString,
     transport: Schema.Literal("url"),
     url: McpServerUrl,
+    authentication: Schema.optional(McpServerAuthentication),
     createdAt: IsoDateTime,
   }),
 ]);
@@ -958,6 +970,7 @@ const McpServerUpdateCommand = Schema.Union([
     name: TrimmedNonEmptyString,
     transport: Schema.Literal("url"),
     url: McpServerUrl,
+    authentication: Schema.optional(McpServerAuthentication),
   }),
 ]);
 
@@ -1249,6 +1262,7 @@ const DispatchableClientOrchestrationCommand = Schema.Union([
   BotUpdateCommand,
   BotArchiveCommand,
   BotRestoreCommand,
+  BotDeleteCommand,
   GroupCreateCommand,
   GroupRenameCommand,
   GroupDeleteCommand,
@@ -1292,6 +1306,7 @@ export const ClientOrchestrationCommand = Schema.Union([
   BotUpdateCommand,
   BotArchiveCommand,
   BotRestoreCommand,
+  BotDeleteCommand,
   GroupCreateCommand,
   GroupRenameCommand,
   GroupDeleteCommand,
@@ -1425,6 +1440,7 @@ export const OrchestrationEventType = Schema.Literals([
   "bot.updated",
   "bot.archived",
   "bot.restored",
+  "bot.deleted",
   "group.created",
   "group.renamed",
   "group.deleted",
@@ -1551,6 +1567,11 @@ export const BotArchivedPayload = Schema.Struct({
 export const BotRestoredPayload = Schema.Struct({
   botId: BotId,
   updatedAt: IsoDateTime,
+});
+
+export const BotDeletedPayload = Schema.Struct({
+  botId: BotId,
+  deletedAt: IsoDateTime,
 });
 
 export const GroupCreatedPayload = Schema.Struct({
@@ -1886,6 +1907,11 @@ export const OrchestrationEvent = Schema.Union([
     ...EventBaseFields,
     type: Schema.Literal("bot.restored"),
     payload: BotRestoredPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("bot.deleted"),
+    payload: BotDeletedPayload,
   }),
   Schema.Struct({
     ...EventBaseFields,

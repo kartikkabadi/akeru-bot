@@ -133,6 +133,14 @@ const CURSOR_DRIVER_KIND = ProviderDriverKind.make("cursor");
 const GROK_DRIVER_KIND = ProviderDriverKind.make("grok");
 const OPENCODE_DRIVER_KIND = ProviderDriverKind.make("opencode");
 
+export type AkeruRuntimeDriverKind = ProviderDriverKind & ("codex" | "claudeAgent" | "grok");
+
+/** Drivers Akeru runs through its subscription-backed agent runtime. */
+export const isAkeruRuntimeDriver = (
+  driver: ProviderDriverKind,
+): driver is AkeruRuntimeDriverKind =>
+  driver === CODEX_DRIVER_KIND || driver === CLAUDE_DRIVER_KIND || driver === GROK_DRIVER_KIND;
+
 export const DEFAULT_MODEL = "gpt-5.6-sol";
 
 /**

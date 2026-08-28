@@ -1,4 +1,3 @@
-import { withRelayClientTracing } from "@t3tools/shared/relayTracing";
 import * as Cause from "effect/Cause";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
@@ -261,15 +260,6 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
     yield* Queue.offer(signals, next);
   });
 
-  const logManagedRelayAccountChange = Effect.logInfo(
-    "Managed relay account changed; restarting the environment connection.",
-  ).pipe(
-    Effect.annotateLogs({
-      "environment.id": target.environmentId,
-      "environment.label": target.label,
-    }),
-  );
-
   const reportProgress = Effect.fn("EnvironmentSupervisor.reportProgress")(function* (
     attempt: number,
     generation: number,
@@ -294,7 +284,7 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
     );
   });
 
-  const traceRelayEstablishment = (
+  const traceEstablishment = (
     effect: Effect.Effect<
       ConnectionDriver.EnvironmentConnectionLease,
       ConnectionAttemptError,
@@ -324,7 +314,7 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
         ),
       );
       return { attemptSpan: Option.some(attemptSpan), lease };
-    }).pipe(Effect.withSpan("relay.connection.attempt", { root: true }));
+    }).pipe(Effect.withSpan("connection.attempt", { root: true }));
 
     return Option.match(pendingRetry, {
       onNone: () => traced,
@@ -335,7 +325,7 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
             "connection.retry.reason": retry.reason,
           }),
         ),
-    }).pipe(withRelayClientTracing);
+    });
   };
 
   const establishTracedConnection = Effect.fnUntraced(function* (
@@ -344,25 +334,11 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
     lastFailure: ConnectionAttemptError | null,
     pendingRetry: Option.Option<PendingRetryTrace>,
   ) {
-    if (target._tag === "RelayConnectionTarget") {
-      return yield* traceRelayEstablishment(
-        establishConnection(attempt, generation, lastFailure),
-        attempt,
-        generation,
-        pendingRetry,
-      );
-    }
-    return yield* establishConnection(attempt, generation, lastFailure).pipe(
-      Effect.map((lease) => ({
-        attemptSpan: Option.none<Tracer.Span>(),
-        lease,
-      })),
-      Effect.mapError(
-        (error): TracedAttemptFailure => ({
-          error,
-          attemptSpan: Option.none(),
-        }),
-      ),
+    return yield* traceEstablishment(
+      establishConnection(attempt, generation, lastFailure),
+      attempt,
+      generation,
+      pendingRetry,
     );
   });
 
@@ -384,10 +360,6 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
           if (next.reason === "application-active-reconnect") {
             return true;
           }
-          if (next.reason === "credentials-changed" && target._tag === "RelayConnectionTarget") {
-            yield* logManagedRelayAccountChange;
-            return false;
-          }
           break;
       }
     }
@@ -408,10 +380,6 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
           }
           break;
         case "Wakeup":
-          if (next.reason === "credentials-changed" && target._tag === "RelayConnectionTarget") {
-            yield* logManagedRelayAccountChange;
-            return false;
-          }
           if (next.reason === "application-active-reconnect") {
             // Mobile operating systems commonly suspend sockets without
             // delivering a close event. A long background resume deliberately
@@ -466,13 +434,6 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
                   if (probeEvent.signal.reason === "application-active-reconnect") {
                     yield* Fiber.interrupt(probe);
                     return true;
-                  }
-                  if (
-                    probeEvent.signal.reason === "credentials-changed" &&
-                    target._tag === "RelayConnectionTarget"
-                  ) {
-                    yield* Fiber.interrupt(probe);
-                    return false;
                   }
                   break;
                 case "ConnectRequested":
