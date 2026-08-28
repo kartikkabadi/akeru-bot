@@ -14,6 +14,7 @@ import type {
 import {
   ApprovalRequestId,
   ClaudeSettings,
+  McpServerId,
   ProviderDriverKind,
   ProviderItemId,
   ProviderRuntimeEvent,
@@ -35,6 +36,7 @@ import * as TestClock from "effect/testing/TestClock";
 import { attachmentRelativePath } from "../../attachmentStore.ts";
 import { ServerConfig } from "../../config.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
+import { AKERU_AGENT_INSTRUCTIONS } from "../AkeruAgentInstructions.ts";
 import { ProviderAdapterProcessError, ProviderAdapterValidationError } from "../Errors.ts";
 import type { ClaudeAdapterShape } from "../Services/ClaudeAdapter.ts";
 import { makeClaudeAdapter, type ClaudeAdapterLiveOptions } from "./ClaudeAdapter.ts";
@@ -42,7 +44,7 @@ const decodeClaudeSettings = Schema.decodeSync(ClaudeSettings);
 
 // Test-local service tag so the rest of the file can keep using `yield* ClaudeAdapter`.
 class ClaudeAdapter extends Context.Service<ClaudeAdapter, ClaudeAdapterShape>()(
-  "t3/provider/Layers/ClaudeAdapter.test/ClaudeAdapter",
+  "akeru-bot/provider/Layers/ClaudeAdapter.test/ClaudeAdapter",
 ) {}
 
 class FakeClaudeQuery implements AsyncIterable<SDKMessage> {
@@ -418,7 +420,7 @@ describe("ClaudeAdapterLive", () => {
             "append" in createInput.options.systemPrompt
             ? (createInput.options.systemPrompt.append ?? "")
             : "",
-          "general-purpose assistant",
+          AKERU_AGENT_INSTRUCTIONS,
         );
       }).pipe(
         Effect.provideService(Random.Random, makeDeterministicRandomService()),
@@ -426,6 +428,43 @@ describe("ClaudeAdapterLive", () => {
       );
     },
   );
+
+  it.effect("names enabled MCP plugins in Claude instructions", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: ProviderDriverKind.make("claudeAgent"),
+        runtimeMode: "full-access",
+        mcpServers: [
+          {
+            id: McpServerId.make("builtin-exa"),
+            name: "Exa",
+            transport: "url",
+            url: "https://mcp.exa.ai/mcp",
+            enabled: true,
+            createdAt: "2026-01-01T00:00:00.000Z",
+            updatedAt: "2026-01-01T00:00:00.000Z",
+          },
+        ],
+      });
+
+      const systemPrompt = harness.getLastCreateQueryInput()?.options.systemPrompt;
+      assert.include(
+        typeof systemPrompt === "object" && "append" in systemPrompt
+          ? (systemPrompt.append ?? "")
+          : "",
+        "Enabled MCP plugins for this chat: Exa.",
+      );
+      assert.deepInclude(harness.getLastCreateQueryInput()?.options.mcpServers, {
+        "builtin-exa": { type: "http", url: "https://mcp.exa.ai/mcp", headers: {} },
+      });
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
 
   it.effect("passes the configured auto-compaction window to Claude", () => {
     const harness = makeHarness({ claudeConfig: { autoCompactWindow: "300000" } });

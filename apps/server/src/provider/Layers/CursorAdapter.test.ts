@@ -30,10 +30,11 @@ import { ServerSettingsService } from "../../serverSettings.ts";
 import type { CursorAdapterShape } from "../Services/CursorAdapter.ts";
 import { makeCursorAdapter } from "./CursorAdapter.ts";
 const decodeCursorSettings = Schema.decodeSync(CursorSettings);
+const encodeUnknownJsonString = Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown));
 
 // Test-local service tag so the rest of the file can keep using `yield* CursorAdapter`.
 class CursorAdapter extends Context.Service<CursorAdapter, CursorAdapterShape>()(
-  "t3/provider/Layers/CursorAdapter.test/CursorAdapter",
+  "akeru-bot/provider/Layers/CursorAdapter.test/CursorAdapter",
 ) {}
 
 const __dirname = NodePath.dirname(NodeURL.fileURLToPath(import.meta.url));
@@ -533,6 +534,17 @@ cursorAdapterTestLayer("CursorAdapterLive", (it) => {
           "mode",
         ]);
 
+        const emptyTurnError = yield* adapter
+          .sendTurn({
+            threadId,
+            input: "",
+            attachments: [],
+            modelSelection,
+            interactionMode: "default",
+          })
+          .pipe(Effect.flip);
+        assert.equal(emptyTurnError._tag, "ProviderAdapterValidationError");
+
         yield* adapter.sendTurn({
           threadId,
           input: "hello mock",
@@ -550,7 +562,15 @@ cursorAdapterTestLayer("CursorAdapterLive", (it) => {
             : [],
         );
         assert.deepStrictEqual(finalConfigIds, ["model", "reasoning", "context", "fast", "mode"]);
-        assert.equal(finalRequests.filter((entry) => entry.method === "session/prompt").length, 1);
+        const promptRequests = finalRequests.filter((entry) => entry.method === "session/prompt");
+        assert.equal(promptRequests.length, 1);
+        const promptPayload = yield* encodeUnknownJsonString(promptRequests[0]?.params);
+        assert.include(promptPayload, 'Selected model ID: \\"cursor/gpt-5.4\\"');
+        assert.notInclude(promptPayload, "Harness:");
+        assert.notInclude(promptPayload, "Mode:");
+        assert.notInclude(promptPayload, "Workspace tools:");
+        assert.notInclude(promptPayload, "Enabled MCP plugins:");
+        assert.include(promptPayload, '"text":"hello mock"');
       }),
   );
 

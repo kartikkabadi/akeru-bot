@@ -1233,8 +1233,9 @@ export function makeOpenCodeAdapter(
               });
               yield* Effect.forEach(
                 input.mcpServers ?? [],
-                (mcpServer) =>
-                  runOpenCodeSdk("mcp.add", () =>
+                (mcpServer) => {
+                  const authorization = input.mcpServerAuthorizationHeaders?.[mcpServer.id];
+                  return runOpenCodeSdk("mcp.add", () =>
                     client.mcp.add({
                       name: String(mcpServer.id),
                       config:
@@ -1242,6 +1243,9 @@ export function makeOpenCodeAdapter(
                           ? {
                               type: "remote",
                               url: mcpServer.url,
+                              ...(authorization
+                                ? { headers: { Authorization: authorization } }
+                                : {}),
                               oauth: false,
                             }
                           : {
@@ -1249,7 +1253,8 @@ export function makeOpenCodeAdapter(
                               command: [mcpServer.command, ...(mcpServer.args ?? [])],
                             },
                     }),
-                  ),
+                  );
+                },
                 { discard: true },
               );
               const mcpSession = McpProviderSession.readMcpProviderSession(input.threadId);

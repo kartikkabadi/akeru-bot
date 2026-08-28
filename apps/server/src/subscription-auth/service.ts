@@ -47,6 +47,8 @@ import {
   startXAIDeviceLogin,
   type XAIDeviceLoginPending,
 } from "./providers/xai.ts";
+import type { ServerSettingsPatch } from "@t3tools/contracts";
+
 import type { OAuthCredential, OAuthCredentials, SubscriptionAuthData } from "./types.ts";
 
 export const SUBSCRIPTION_PROVIDER_IDS = [
@@ -89,6 +91,56 @@ export interface ProviderStatus {
   expiresAt?: number;
 }
 
+/** Short-lived credentials supplied to an active provider request. */
+export interface SubscriptionRuntimeCredential {
+  readonly accessToken: string;
+  readonly accountId?: string;
+}
+
+/** Keep the provider registry aligned with Akeru's subscription login state. */
+export function subscriptionProviderDriver(
+  provider: SubscriptionProviderId,
+): "claudeAgent" | "codex" | "cursor" | "grok" | undefined {
+  switch (provider) {
+    case "openai-codex":
+      return "codex";
+    case "anthropic":
+      return "claudeAgent";
+    case "cursor":
+      return "cursor";
+    case "xai":
+      return "grok";
+    case "kimi-for-coding":
+      return undefined;
+  }
+}
+
+export function subscriptionProviderSettingsPatchFor(
+  provider: SubscriptionProviderId,
+  enabled: boolean,
+): ServerSettingsPatch {
+  const settingsProvider = subscriptionProviderDriver(provider);
+  return settingsProvider ? { providers: { [settingsProvider]: { enabled } } } : {};
+}
+
+/** Enable connected subscriptions without disabling providers authenticated another way. */
+export function subscriptionProviderSettingsPatch(
+  statuses: ReadonlyArray<Pick<ProviderStatus, "provider" | "connected">>,
+): ServerSettingsPatch {
+  return statuses.reduce<ServerSettingsPatch>(
+    (patch, status) =>
+      status.connected
+        ? {
+            providers: {
+              ...patch.providers,
+              ...subscriptionProviderSettingsPatchFor(status.provider, true).providers,
+            },
+          }
+        : patch,
+    {},
+  );
+}
+
 type PendingLogin =
   | { provider: "anthropic"; verifier: string }
   | { provider: "openai-codex"; pending: CodexDeviceLoginPending }
@@ -116,17 +168,20 @@ export class SubscriptionAuthService {
     return new SubscriptionAuthService(NodePath.join(secretsDir, "subscription-auth.json"));
   }
 
-  reload(): void {
+  private reloadCredentials(): void {
     if (!NodeFS.existsSync(this.authPath)) {
       this.data = {};
-    } else {
-      try {
-        this.data = JSON.parse(NodeFS.readFileSync(this.authPath, "utf-8")) as SubscriptionAuthData;
-      } catch {
-        this.data = {};
-      }
+      return;
     }
+    try {
+      this.data = JSON.parse(NodeFS.readFileSync(this.authPath, "utf-8")) as SubscriptionAuthData;
+    } catch {
+      this.data = {};
+    }
+  }
 
+  reload(): void {
+    this.reloadCredentials();
     this.pendingLogins.clear();
     if (!NodeFS.existsSync(this.pendingPath)) return;
     try {
@@ -164,6 +219,7 @@ export class SubscriptionAuthService {
   }
 
   statuses(): ProviderStatus[] {
+    this.reloadCredentials();
     return SUBSCRIPTION_PROVIDER_IDS.map((provider) => {
       const credential = this.data[provider];
       return credential
@@ -173,7 +229,12 @@ export class SubscriptionAuthService {
   }
 
   isConnected(provider: SubscriptionProviderId): boolean {
+    this.reloadCredentials();
     return this.data[provider] !== undefined;
+  }
+
+  providerForLogin(loginId: string): SubscriptionProviderId | undefined {
+    return this.pendingLogins.get(loginId)?.provider;
   }
 
   async startLogin(provider: SubscriptionProviderId): Promise<StartedLogin> {
@@ -346,11 +407,13 @@ export class SubscriptionAuthService {
   }
 
   logout(provider: SubscriptionProviderId): void {
+    this.reloadCredentials();
     delete this.data[provider];
     this.save();
   }
 
   private setCredential(provider: SubscriptionProviderId, credentials: OAuthCredentials): void {
+    this.reloadCredentials();
     this.data[provider] = { type: "oauth", ...credentials };
     this.save();
   }
@@ -361,6 +424,7 @@ export class SubscriptionAuthService {
    * the user re-connects from Settings.
    */
   async getAccessToken(provider: SubscriptionProviderId): Promise<string | undefined> {
+    this.reloadCredentials();
     const credential = this.data[provider];
     if (!credential) return undefined;
 
@@ -376,6 +440,24 @@ export class SubscriptionAuthService {
     });
     this.refreshInFlight.set(provider, refresh);
     return refresh;
+  }
+
+  /**
+   * Read request-scoped credentials without exposing refresh tokens. Provider
+   * metadata is reloaded after refresh so Codex receives the current account id.
+   */
+  async getRuntimeCredential(
+    provider: SubscriptionProviderId,
+  ): Promise<SubscriptionRuntimeCredential | undefined> {
+    const accessToken = await this.getAccessToken(provider);
+    if (!accessToken) return undefined;
+    this.reloadCredentials();
+    const credential = this.data[provider];
+    const accountId =
+      provider === "openai-codex" && typeof credential?.accountId === "string"
+        ? credential.accountId
+        : undefined;
+    return { accessToken, ...(accountId ? { accountId } : {}) };
   }
 
   private async refreshCredential(

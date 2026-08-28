@@ -1,33 +1,17 @@
-// @effect-diagnostics globalDate:off globalConsole:off globalRandom:off nodeBuiltinImport:off
-import * as NodeCrypto from "node:crypto";
-import * as NodeFS from "node:fs";
+// @effect-diagnostics globalDate:off nodeBuiltinImport:off
 import * as NodePath from "node:path";
 
-import { AuthStorage } from "@mastra/code-sdk/auth/storage";
+import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import {
-  createMcpManager,
-  type McpManager,
-  type McpServerConfig,
-} from "@mastra/code-sdk/mcp/index";
-import type {
-  AgentControllerEvent,
-  MastraDBMessage,
-  MastraMessagePart,
-} from "@mastra/core/agent-controller";
-import { Workspace } from "@mastra/core/workspace";
-import {
-  EventId,
-  ProviderDriverKind,
+  isAkeruRuntimeDriver,
   ProviderInstanceId,
-  RuntimeItemId,
-  RuntimeRequestId,
-  TurnId,
+  type AkeruRuntimeDriverKind,
+  type BotSandbox,
   type McpServer,
   type ModelSelection,
-  type ProviderApprovalDecision,
+  type ProviderConversationContext,
+  type ProviderDriverKind,
   type ProviderRuntimeEvent,
-  type ProviderSession,
-  type RuntimeMode,
   type ThreadId,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
@@ -38,149 +22,104 @@ import * as Stream from "effect/Stream";
 
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
 import { ServerConfig } from "../../config.ts";
+import { McpOAuthRuntime, type PreparedMcpRuntime } from "../../mcp-auth/McpOAuth.ts";
+import { SubscriptionAuthService } from "../../subscription-auth/service.ts";
+import { createAkeruAgentSession, type AkeruAgentSession } from "../AkeruAgentRuntime.ts";
 import {
-  createAkeruMastraHarness,
-  type AkeruMastraHarness,
-  type AkeruMastraHarnessOptions,
-  type AkeruMastraSession,
-} from "../AkeruMastraHarness.ts";
-import { createBotWorkspace, type CreateRemoteBotWorkspaceInput } from "../botWorkspace.ts";
+  createAkeruLanguageModel,
+  subscriptionTokenSource,
+  type AkeruModelProvider,
+} from "../AkeruModelAdapters.ts";
+import { createAiSdkModelRunner, type AkeruModelRunner } from "../AkeruModelRunner.ts";
+import {
+  createAkeruConversationMemory,
+  type AkeruConversationMemory,
+} from "../AkeruObservationalMemory.ts";
+import { createAkeruMcpToolProvider } from "../AkeruMcpTools.ts";
+import { createAkeruSandboxToolProvider, isRemoteBotSandbox } from "../AkeruSandboxTools.ts";
+import {
+  createAkeruToolRegistry,
+  type AkeruToolDefinition,
+  type AkeruToolProvider,
+} from "../AkeruToolRegistry.ts";
 import { AgentControllerRuntimeError, AgentControllerUnsupportedEngineError } from "../Errors.ts";
 import { AgentController, type AgentControllerShape } from "../Services/AgentController.ts";
 import { LegacyProviderBridge } from "../Services/LegacyProviderBridge.ts";
-
-const DEFAULT_MODE_ID = "build";
-const PLAN_MODE_ID = "plan";
-type MastraSession = AkeruMastraSession;
 
 interface ResolvedEngine {
   readonly modelSelection: ModelSelection;
   readonly provider: ProviderDriverKind;
   readonly providerInstanceId: ProviderInstanceId;
-  readonly mastraModelId: string;
   readonly mode: "default" | "plan";
 }
 
-interface ActiveTurn {
-  readonly turnId: TurnId;
-  readonly assistantItemId: RuntimeItemId;
-  assistantLength: number;
-  assistantStarted: boolean;
-  assistantCompleted: boolean;
-  waiting: boolean;
-  finished: boolean;
-}
-
-interface ActiveSession {
-  readonly session: MastraSession;
-  readonly provider: ProviderDriverKind;
-  readonly providerInstanceId: ProviderInstanceId;
-  readonly cwd: string | undefined;
-  readonly createdAt: string;
-  readonly mcpServerIds: readonly McpServer["id"][];
-  runtimeMode: RuntimeMode;
-  model: string;
-  status: ProviderSession["status"];
-  activeTurn: ActiveTurn | null;
-  readonly toolNames: Map<string, string>;
-  readonly unsubscribe: () => void;
+interface ActiveAkeruSession {
+  readonly session: AkeruAgentSession;
 }
 
 export interface AgentControllerLiveOptions {
-  readonly makeMastraHarness?: (options: AkeruMastraHarnessOptions) => Promise<AkeruMastraHarness>;
-  readonly makeMcpManager?: typeof createMcpManager;
-  readonly makeRemoteWorkspace?: (input: CreateRemoteBotWorkspaceInput) => Promise<Workspace>;
-}
-
-export function createAkeruMastraAuthStorage(secretsDir: string): AuthStorage {
-  return new AuthStorage(NodePath.join(secretsDir, "subscription-auth.json"));
+  readonly modelRunner?: AkeruModelRunner;
+  readonly handlesWithAkeruRuntime?: (
+    driver: ProviderDriverKind,
+  ) => driver is AkeruRuntimeDriverKind;
+  readonly prepareMcpRuntime?: (servers: readonly McpServer[]) => Promise<PreparedMcpRuntime>;
+  readonly makeConversationMemory?: () => Promise<AkeruConversationMemory>;
+  readonly makeToolProviders?: (input: {
+    readonly threadId: ThreadId;
+    readonly cwd?: string;
+    readonly mcpServers: readonly McpServer[];
+    readonly authorizationHeaders: Readonly<Record<string, string>>;
+    readonly botSandbox?: BotSandbox | null;
+  }) => Promise<readonly AkeruToolProvider[]>;
+  readonly makeTools?: (input: {
+    readonly cwd?: string;
+    readonly providers: readonly AkeruToolProvider[];
+    readonly signal?: AbortSignal;
+  }) => Promise<{
+    readonly tools: ReadonlyMap<string, AkeruToolDefinition>;
+    readonly close: () => Promise<void>;
+  }>;
 }
 
 function failureDetail(cause: unknown): string {
   return cause instanceof Error ? cause.message : String(cause);
 }
 
-function nowIso(): string {
-  return new Date().toISOString();
-}
-
-function eventId(): EventId {
-  return EventId.make(`mastra-${NodeCrypto.randomUUID()}`);
-}
-
-function messageText(message: MastraDBMessage): string {
-  return message.content.parts
-    .filter(
-      (part): part is MastraMessagePart & { text: string } =>
-        part.type === "text" && typeof part.text === "string",
-    )
-    .map((part) => part.text)
-    .join("");
-}
-
-function mastraModeId(mode: "default" | "plan"): string {
-  return mode === "plan" ? PLAN_MODE_ID : DEFAULT_MODE_ID;
-}
-
-function mastraModelId(provider: ProviderDriverKind, model: string): string {
-  switch (String(provider)) {
-    case "codex":
-      return `openai/${model}`;
-    case "claudeAgent":
-      return `anthropic/${model}`;
-    case "grok":
-      return `xai/${model}`;
-    default:
-      return model.includes("/") ? model : `${provider}/${model}`;
-  }
-}
-
-export function toMcpServerConfigs(servers: readonly McpServer[]): Record<string, McpServerConfig> {
-  return Object.fromEntries(
-    servers.map((server) => [
-      String(server.id),
-      server.transport === "url"
-        ? { url: server.url }
-        : { command: server.command, ...(server.args ? { args: [...server.args] } : {}) },
-    ]),
-  );
-}
-
-function permissionPolicy(
-  runtimeMode: RuntimeMode,
-  category: "read" | "edit" | "execute" | "mcp" | "other",
-): "allow" | "ask" {
-  if (runtimeMode === "full-access" || runtimeMode === "auto") return "allow";
-  if (category === "read") return "allow";
-  if (runtimeMode === "auto-accept-edits" && category === "edit") return "allow";
-  return "ask";
-}
-
-function usesMastraCode(provider: ProviderDriverKind): boolean {
-  return String(provider) === "codex";
-}
-
-function itemType(
-  toolName: string,
-): "command_execution" | "file_change" | "mcp_tool_call" | "dynamic_tool_call" {
-  if (/execute|command|shell|terminal/i.test(toolName)) return "command_execution";
-  if (/edit|write|delete|mkdir|file/i.test(toolName)) return "file_change";
-  if (/mcp/i.test(toolName)) return "mcp_tool_call";
-  return "dynamic_tool_call";
+function modelProvider(driver: AkeruRuntimeDriverKind): AkeruModelProvider {
+  if (driver === "codex") return "codex";
+  if (driver === "claudeAgent") return "claudeAgent";
+  return "grok";
 }
 
 const make = (options?: AgentControllerLiveOptions) =>
   Effect.gen(function* () {
     const config = yield* ServerConfig;
+    const hostPlatform = yield* HostProcessPlatform;
     const legacyProviderBridge = yield* LegacyProviderBridge;
     const mutationLock = yield* Semaphore.make(1);
     const runtimeEvents = yield* PubSub.unbounded<ProviderRuntimeEvent>();
     const resolvedByThread = new Map<string, ResolvedEngine>();
-    const sessions = new Map<string, ActiveSession>();
+    const sessions = new Map<string, ActiveAkeruSession>();
+    const sessionVersions = new Map<string, number>();
+    const pendingSessionStarts = new Map<string, AbortController>();
+    const legacyContextSeeded = new Map<string, boolean>();
+    const nextSessionVersion = (key: string) => {
+      const version = (sessionVersions.get(key) ?? 0) + 1;
+      sessionVersions.set(key, version);
+      return version;
+    };
+    const subscriptionAuth = SubscriptionAuthService.forSecretsDir(config.secretsDir);
+    const tokens = subscriptionTokenSource(subscriptionAuth);
+    const modelRunner = options?.modelRunner ?? createAiSdkModelRunner(tokens);
+    const handlesWithAkeruRuntime = options?.handlesWithAkeruRuntime ?? isAkeruRuntimeDriver;
+    const mcpOAuth = McpOAuthRuntime.forSecretsDir(config.secretsDir);
+    const prepareMcpRuntime =
+      options?.prepareMcpRuntime ??
+      ((servers: readonly McpServer[]) => mcpOAuth.prepareRuntime(servers));
 
-    const runMastra = <A>(operation: string, run: () => Promise<A>) =>
+    const run = <A>(operation: string, execute: () => Promise<A>) =>
       Effect.tryPromise({
-        try: run,
+        try: execute,
         catch: (cause) =>
           new AgentControllerRuntimeError({
             operation,
@@ -189,296 +128,24 @@ const make = (options?: AgentControllerLiveOptions) =>
           }),
       });
 
-    yield* Effect.sync(() => {
-      NodeFS.mkdirSync(config.stateDir, { recursive: true, mode: 0o700 });
-    });
-
-    const authStorage = createAkeruMastraAuthStorage(config.secretsDir);
-    const mcpManagers = new Map<string, McpManager>();
-    const workspaces = new Map<string, Workspace>();
-    const makeMastraHarness = options?.makeMastraHarness ?? createAkeruMastraHarness;
-    const bundle = yield* runMastra("construct", () =>
-      makeMastraHarness({
-        authStorage,
-        getThreadTools: (threadId) => mcpManagers.get(threadId)?.getTools() ?? {},
-        getThreadWorkspace: (threadId) => workspaces.get(threadId),
-      }),
+    const memory = yield* run("memory.construct", () =>
+      options?.makeConversationMemory
+        ? options.makeConversationMemory()
+        : createAkeruConversationMemory({
+            dbPath: NodePath.join(config.stateDir, "akeru-observational-memory.sqlite"),
+            resolveModel: (threadId) => {
+              const resolved = resolvedByThread.get(threadId);
+              if (!resolved || !handlesWithAkeruRuntime(resolved.provider)) {
+                throw new Error(`Thread '${threadId}' has no Akeru model for observation.`);
+              }
+              return createAkeruLanguageModel({
+                provider: modelProvider(resolved.provider),
+                model: resolved.modelSelection.model,
+                tokens,
+              });
+            },
+          }),
     );
-    yield* runMastra("init", () => bundle.controller.init());
-
-    const disconnectMcpManager = (key: string) => {
-      const manager = mcpManagers.get(key);
-      if (!manager) return Effect.void;
-      mcpManagers.delete(key);
-      return runMastra("mcp.disconnect", () => manager.disconnect()).pipe(
-        Effect.ignoreCause({ log: true }),
-      );
-    };
-
-    const disconnectWorkspace = (key: string) => {
-      const workspace = workspaces.get(key);
-      if (!workspace) return Effect.void;
-      workspaces.delete(key);
-      return runMastra("workspace.destroy", () => workspace.destroy()).pipe(
-        Effect.ignoreCause({ log: true }),
-      );
-    };
-
-    const publish = (event: ProviderRuntimeEvent) => {
-      PubSub.publishUnsafe(runtimeEvents, event);
-    };
-
-    const baseEvent = (
-      threadId: ThreadId,
-      active: Pick<ActiveSession, "provider" | "providerInstanceId">,
-      turnId?: TurnId,
-    ) => ({
-      eventId: eventId(),
-      provider: active.provider,
-      providerInstanceId: active.providerInstanceId,
-      threadId,
-      createdAt: nowIso(),
-      ...(turnId ? { turnId } : {}),
-    });
-
-    const publishSessionState = (
-      threadId: ThreadId,
-      active: ActiveSession,
-      state: "ready" | "running" | "waiting" | "stopped" | "error",
-      reason?: string,
-    ) => {
-      active.status =
-        state === "running"
-          ? "running"
-          : state === "error"
-            ? "error"
-            : state === "stopped"
-              ? "closed"
-              : "ready";
-      publish({
-        ...baseEvent(threadId, active, active.activeTurn?.turnId),
-        type: "session.state.changed",
-        payload: { state, ...(reason ? { reason } : {}) },
-      });
-    };
-
-    const finishTurn = (
-      threadId: ThreadId,
-      active: ActiveSession,
-      state: "completed" | "failed" | "interrupted",
-      errorMessage?: string,
-    ) => {
-      const turn = active.activeTurn;
-      if (!turn || turn.finished) return;
-      turn.finished = true;
-      if (turn.assistantStarted && !turn.assistantCompleted) {
-        turn.assistantCompleted = true;
-        publish({
-          ...baseEvent(threadId, active, turn.turnId),
-          itemId: turn.assistantItemId,
-          type: "item.completed",
-          payload: { itemType: "assistant_message", status: "completed" },
-        });
-      }
-      publish({
-        ...baseEvent(threadId, active, turn.turnId),
-        type: "turn.completed",
-        payload: {
-          state,
-          ...(errorMessage ? { errorMessage } : {}),
-        },
-      });
-      active.activeTurn = null;
-      publishSessionState(threadId, active, "ready");
-    };
-
-    const publishAssistantText = (
-      threadId: ThreadId,
-      active: ActiveSession,
-      message: MastraDBMessage,
-      complete: boolean,
-    ) => {
-      if (message.role !== "assistant") return;
-      const turn = active.activeTurn;
-      if (!turn) return;
-      const text = messageText(message);
-      if (!turn.assistantStarted && text.length > 0) {
-        turn.assistantStarted = true;
-        publish({
-          ...baseEvent(threadId, active, turn.turnId),
-          itemId: turn.assistantItemId,
-          type: "item.started",
-          payload: { itemType: "assistant_message", status: "inProgress" },
-        });
-      }
-      if (text.length > turn.assistantLength) {
-        const delta = text.slice(turn.assistantLength);
-        turn.assistantLength = text.length;
-        publish({
-          ...baseEvent(threadId, active, turn.turnId),
-          itemId: turn.assistantItemId,
-          type: "content.delta",
-          payload: { streamKind: "assistant_text", delta },
-        });
-      }
-      if (complete && turn.assistantStarted && !turn.assistantCompleted) {
-        turn.assistantCompleted = true;
-        publish({
-          ...baseEvent(threadId, active, turn.turnId),
-          itemId: turn.assistantItemId,
-          type: "item.completed",
-          payload: { itemType: "assistant_message", status: "completed" },
-        });
-      }
-    };
-
-    const handleControllerEvent = (
-      threadId: ThreadId,
-      active: ActiveSession,
-      event: AgentControllerEvent,
-    ) => {
-      const turn = active.activeTurn;
-      switch (event.type) {
-        case "message_update":
-          publishAssistantText(threadId, active, event.message, false);
-          return;
-        case "message_end":
-          publishAssistantText(threadId, active, event.message, true);
-          return;
-        case "tool_start": {
-          if (!turn) return;
-          active.toolNames.set(event.toolCallId, event.toolName);
-          publish({
-            ...baseEvent(threadId, active, turn.turnId),
-            itemId: RuntimeItemId.make(event.toolCallId),
-            type: "item.started",
-            payload: {
-              itemType: itemType(event.toolName),
-              status: "inProgress",
-              title: event.toolName,
-              data: { args: event.args },
-            },
-          });
-          return;
-        }
-        case "tool_update":
-          if (!turn) return;
-          publish({
-            ...baseEvent(threadId, active, turn.turnId),
-            itemId: RuntimeItemId.make(event.toolCallId),
-            type: "item.updated",
-            payload: {
-              itemType: itemType(active.toolNames.get(event.toolCallId) ?? "tool"),
-              status: "inProgress",
-              data: { partialResult: event.partialResult },
-            },
-          });
-          return;
-        case "tool_end": {
-          if (!turn) return;
-          const toolName = active.toolNames.get(event.toolCallId) ?? "tool";
-          publish({
-            ...baseEvent(threadId, active, turn.turnId),
-            itemId: RuntimeItemId.make(event.toolCallId),
-            type: "item.completed",
-            payload: {
-              itemType: itemType(toolName),
-              status: event.isError ? "failed" : event.denied ? "declined" : "completed",
-              title: toolName,
-              data: { result: event.result },
-            },
-          });
-          return;
-        }
-        case "tool_approval_required":
-          if (!turn) return;
-          active.toolNames.set(event.toolCallId, event.toolName);
-          turn.waiting = true;
-          publishSessionState(threadId, active, "waiting");
-          publish({
-            ...baseEvent(threadId, active, turn.turnId),
-            requestId: RuntimeRequestId.make(event.toolCallId),
-            type: "request.opened",
-            payload: {
-              requestType: "dynamic_tool_call",
-              detail: `Allow ${event.toolName}?`,
-              args: event.args,
-              options: [
-                { decision: "accept", label: "Allow" },
-                { decision: "acceptForSession", label: "Allow for session" },
-                { decision: "decline", label: "Decline" },
-              ],
-            },
-          });
-          return;
-        case "tool_suspended":
-          if (!turn) return;
-          active.toolNames.set(event.toolCallId, event.toolName);
-          turn.waiting = true;
-          publishSessionState(threadId, active, "waiting");
-          publish({
-            ...baseEvent(threadId, active, turn.turnId),
-            requestId: RuntimeRequestId.make(event.toolCallId),
-            type: "user-input.requested",
-            payload: {
-              questions: [
-                {
-                  id: event.toolCallId,
-                  header: event.toolName,
-                  question: `Input required for ${event.toolName}`,
-                  options: [],
-                  multiSelect: false,
-                },
-              ],
-            },
-          });
-          return;
-        case "usage_update":
-          if (!turn) return;
-          publish({
-            ...baseEvent(threadId, active, turn.turnId),
-            type: "thread.token-usage.updated",
-            payload: {
-              usage: {
-                usedTokens: Math.max(0, event.usage.totalTokens ?? 0),
-                inputTokens: Math.max(0, event.usage.promptTokens ?? 0),
-                outputTokens: Math.max(0, event.usage.completionTokens ?? 0),
-                reasoningOutputTokens: Math.max(0, event.usage.reasoningTokens ?? 0),
-              },
-            },
-          });
-          return;
-        case "error":
-          publish({
-            ...baseEvent(threadId, active, turn?.turnId),
-            type: "runtime.error",
-            payload: {
-              message: event.error.message || "Mastra agent failed.",
-              class: "provider_error",
-            },
-          });
-          finishTurn(threadId, active, "failed", event.error.message || "Mastra agent failed.");
-          return;
-        case "agent_end":
-          if (event.reason === "suspended") {
-            if (turn) turn.waiting = true;
-            publishSessionState(threadId, active, "waiting");
-            return;
-          }
-          finishTurn(
-            threadId,
-            active,
-            event.reason === "aborted"
-              ? "interrupted"
-              : event.reason === "error"
-                ? "failed"
-                : "completed",
-          );
-          return;
-        default:
-          return;
-      }
-    };
 
     const inspectEngine: AgentControllerShape["inspectEngine"] = Effect.fn(
       "AgentController.inspectEngine",
@@ -516,33 +183,41 @@ const make = (options?: AgentControllerLiveOptions) =>
             modelSelection,
             provider: inspected.routing.driverKind,
             providerInstanceId: modelSelection.instanceId,
-            mastraModelId: mastraModelId(inspected.routing.driverKind, modelSelection.model),
             mode: input.mode,
           };
-          resolvedByThread.set(String(input.threadId), resolved);
-          const active = sessions.get(String(input.threadId));
-          if (active && usesMastraCode(resolved.provider)) {
-            yield* runMastra("model.switch", () =>
-              active.session.model.switch({ modelId: resolved.mastraModelId }),
-            );
-            const nextMode = mastraModeId(input.mode);
-            if (active.session.mode.get() !== nextMode) {
-              yield* runMastra("mode.switch", () =>
-                active.session.mode.switch({ modeId: nextMode }),
-              );
-            }
-            active.model = modelSelection.model;
+          const key = String(input.threadId);
+          resolvedByThread.set(key, resolved);
+          if (!sessions.has(key)) {
+            nextSessionVersion(key);
+            pendingSessionStarts.get(key)?.abort(new Error("The selected engine changed."));
+            pendingSessionStarts.delete(key);
           }
+          sessions.get(key)?.session.configure({
+            modelSelection,
+            interactionMode: input.mode,
+          });
           return { ...inspected, mode: input.mode };
         }),
       );
+
+    const prepareContext = Effect.fn("AgentController.prepareContext")(function* (
+      context: ProviderConversationContext,
+      observe = true,
+    ) {
+      const prepared = yield* run("memory.prepare", () => memory.prepare(context, { observe }));
+      if (prepared.degraded) {
+        yield* Effect.logWarning(
+          "observational memory failed; using the bounded recent-message window",
+          { threadId: context.threadId, resourceId: context.resourceId },
+        );
+      }
+      return prepared.prompt;
+    });
 
     const startSession: AgentControllerShape["startSession"] = Effect.fn(
       "AgentController.startSession",
     )(function* (threadId, input) {
       const key = String(threadId);
-      const existing = sessions.get(key);
-      if (existing) return toProviderSession(threadId, existing);
       const resolved = resolvedByThread.get(key);
       if (!resolved) {
         return yield* new AgentControllerRuntimeError({
@@ -550,95 +225,167 @@ const make = (options?: AgentControllerLiveOptions) =>
           detail: `Thread '${threadId}' has no resolved engine.`,
         });
       }
-      if (!usesMastraCode(resolved.provider)) {
-        return yield* legacyProviderBridge.startSession(threadId, input);
-      }
-      const mcpServers = input.mcpServers ?? [];
-      if (mcpServers.length > 0) {
-        const manager = (options?.makeMcpManager ?? createMcpManager)(
-          NodePath.join(config.stateDir, "bot-mcp-runtime"),
-          ".akeru-runtime",
-          toMcpServerConfigs(mcpServers),
+
+      if (!handlesWithAkeruRuntime(resolved.provider)) {
+        return yield* mutationLock.withPermits(1)(
+          Effect.gen(function* () {
+            const existing = sessions.get(key);
+            if (existing) {
+              sessions.delete(key);
+              nextSessionVersion(key);
+              yield* run("session.replace", () => existing.session.close());
+            }
+            const preparedMcp = yield* run("mcp.prepare", () =>
+              prepareMcpRuntime(input.mcpServers ?? []),
+            );
+            const result = yield* legacyProviderBridge.startSession(threadId, {
+              ...input,
+              mcpServers: [...preparedMcp.servers],
+              mcpServerAuthorizationHeaders: preparedMcp.authorizationHeaders,
+            });
+            legacyContextSeeded.set(key, input.resumeCursor !== undefined);
+            return result;
+          }),
         );
-        yield* runMastra("mcp.init", () => manager.init());
-        mcpManagers.set(key, manager);
       }
-      const workspace = yield* runMastra("workspace.create", () =>
-        createBotWorkspace({
-          threadId: key,
-          cwd: input.cwd,
-          sandbox: input.botSandbox,
-          ...(options?.makeRemoteWorkspace
-            ? { makeRemoteWorkspace: options.makeRemoteWorkspace }
-            : {}),
+
+      const decision = yield* mutationLock.withPermits(1)(
+        Effect.sync(() => {
+          const current = resolvedByThread.get(key);
+          if (!current || !handlesWithAkeruRuntime(current.provider)) {
+            return { kind: "changed" as const };
+          }
+          const existing = sessions.get(key);
+          if (existing) {
+            const snapshot = existing.session.snapshot();
+            const activeMcpServerIds = snapshot.mcpServerIds ?? [];
+            const requestedMcpServerIds = (input.mcpServers ?? []).map((server) => server.id);
+            const canReuse =
+              snapshot.provider === modelProvider(current.provider) &&
+              snapshot.providerInstanceId === current.providerInstanceId &&
+              snapshot.cwd === input.cwd &&
+              activeMcpServerIds.length === requestedMcpServerIds.length &&
+              activeMcpServerIds.every((id, index) => id === requestedMcpServerIds[index]);
+            if (canReuse) {
+              existing.session.configure({
+                modelSelection: current.modelSelection,
+                interactionMode: current.mode,
+                runtimeMode: input.runtimeMode,
+              });
+              return { kind: "reused" as const, snapshot: existing.session.snapshot() };
+            }
+            sessions.delete(key);
+          }
+          pendingSessionStarts.get(key)?.abort(new Error("A newer session start replaced it."));
+          const startController = new AbortController();
+          pendingSessionStarts.set(key, startController);
+          return {
+            kind: "build" as const,
+            resolved: current,
+            provider: modelProvider(current.provider),
+            existing,
+            startController,
+            version: nextSessionVersion(key),
+          };
         }),
       );
-      if (workspace) workspaces.set(key, workspace);
-      const session = yield* runMastra("createSession", () =>
-        bundle.controller.createSession({
-          id: key,
-          ownerId: "akeru-desktop",
-          resourceId: key,
-          threadId: key,
-          ...(input.cwd ? { tags: { projectPath: input.cwd } } : {}),
-          ...(workspace ? { workspace } : {}),
-        }),
-      ).pipe(
-        Effect.tapError(() =>
-          Effect.all([disconnectMcpManager(key), disconnectWorkspace(key)], { discard: true }),
-        ),
-      );
-      yield* runMastra("state.set", () =>
-        session.state.set({
-          ...(input.cwd ? { projectPath: input.cwd } : {}),
-          yolo: input.runtimeMode === "full-access" || input.runtimeMode === "auto",
-        }),
-      );
-      yield* runMastra("model.switch", () =>
-        session.model.switch({ modelId: resolved.mastraModelId }),
-      );
-      const modeId = mastraModeId(resolved.mode);
-      if (session.mode.get() !== modeId) {
-        yield* runMastra("mode.switch", () => session.mode.switch({ modeId }));
+      if (decision.kind === "changed") {
+        return yield* new AgentControllerRuntimeError({
+          operation: "startSession",
+          detail: `Thread '${threadId}' changed engine while starting its session.`,
+        });
       }
-      yield* Effect.forEach(
-        ["read", "edit", "execute", "mcp", "other"] as const,
-        (category) =>
-          runMastra("permissions.setForCategory", () =>
-            session.permissions.setForCategory({
-              category,
-              policy: permissionPolicy(input.runtimeMode, category),
+      if (decision.kind === "reused") return decision.snapshot;
+      const replacedSession = decision.existing?.session;
+      if (replacedSession) {
+        yield* run("session.replace", () => replacedSession.close());
+      }
+
+      const preparedMcp = yield* run("mcp.prepare", () =>
+        prepareMcpRuntime(input.mcpServers ?? []),
+      );
+      const remoteSandbox = isRemoteBotSandbox(input.botSandbox) ? input.botSandbox : undefined;
+      const providers = yield* run("tools.providers", () =>
+        options?.makeToolProviders
+          ? options.makeToolProviders({
+              threadId,
+              ...(input.cwd ? { cwd: input.cwd } : {}),
+              mcpServers: preparedMcp.servers,
+              authorizationHeaders: preparedMcp.authorizationHeaders,
+              ...(input.botSandbox !== undefined ? { botSandbox: input.botSandbox } : {}),
+            })
+          : Promise.resolve([
+              createAkeruMcpToolProvider({
+                servers: preparedMcp.servers,
+                authorizationHeaders: preparedMcp.authorizationHeaders,
+                ...(input.cwd ? { cwd: input.cwd } : {}),
+              }),
+              ...(remoteSandbox
+                ? [
+                    createAkeruSandboxToolProvider({
+                      sandbox: remoteSandbox,
+                      sessionId: String(threadId),
+                      ...(input.cwd ? { workspaceRoot: input.cwd } : {}),
+                      transferRoot: config.attachmentsDir,
+                    }),
+                  ]
+                : []),
+            ]),
+      );
+      const registry = yield* run("tools.create", () =>
+        options?.makeTools
+          ? options.makeTools({
+              ...(!remoteSandbox && input.cwd ? { cwd: input.cwd } : {}),
+              providers,
+              signal: decision.startController.signal,
+            })
+          : createAkeruToolRegistry({
+              platform: hostPlatform,
+              ...(!remoteSandbox && input.cwd ? { cwd: input.cwd } : {}),
+              providers,
+              signal: decision.startController.signal,
             }),
-          ),
-        { discard: true },
       );
-      const createdAt = nowIso();
-      const activeWithoutUnsubscribe = {
-        session,
-        provider: resolved.provider,
-        providerInstanceId: resolved.providerInstanceId,
-        cwd: input.cwd,
-        createdAt,
-        mcpServerIds: mcpServers.map((server) => server.id),
-        runtimeMode: input.runtimeMode,
-        model: resolved.modelSelection.model,
-        status: "ready" as const,
-        activeTurn: null,
-        toolNames: new Map<string, string>(),
-      };
-      const unsubscribe = session.subscribe((event) => {
-        const active = sessions.get(key);
-        if (active) handleControllerEvent(threadId, active, event);
-      });
-      const active: ActiveSession = { ...activeWithoutUnsubscribe, unsubscribe };
-      sessions.set(key, active);
-      publish({
-        ...baseEvent(threadId, active),
-        type: "session.started",
-        payload: { message: "Mastra Code session ready" },
-      });
-      publishSessionState(threadId, active, "ready");
-      return toProviderSession(threadId, active);
+      const installed = yield* mutationLock.withPermits(1)(
+        Effect.sync(() => {
+          if (
+            sessionVersions.get(key) !== decision.version ||
+            resolvedByThread.get(key) !== decision.resolved
+          ) {
+            return undefined;
+          }
+          const session = createAkeruAgentSession({
+            session: {
+              threadId,
+              provider: decision.provider,
+              providerInstanceId: decision.resolved.providerInstanceId,
+              model: decision.resolved.modelSelection.model,
+              interactionMode: decision.resolved.mode,
+              runtimeMode: input.runtimeMode,
+              ...(input.cwd ? { cwd: input.cwd } : {}),
+              mcpServerIds: (input.mcpServers ?? []).map((server) => server.id),
+              tools: registry.tools,
+              contextSeeded: input.resumeCursor !== undefined,
+            },
+            modelRunner,
+            publish: (event) => PubSub.publishUnsafe(runtimeEvents, event),
+            closeTools: registry.close,
+          });
+          if (pendingSessionStarts.get(key) === decision.startController) {
+            pendingSessionStarts.delete(key);
+          }
+          sessions.set(key, { session });
+          return session;
+        }),
+      );
+      if (!installed) {
+        yield* run("tools.cancelStart", () => registry.close());
+        return yield* new AgentControllerRuntimeError({
+          operation: "startSession",
+          detail: `Thread '${threadId}' changed while starting its session.`,
+        });
+      }
+      return installed.snapshot();
     });
 
     const sendTurn: AgentControllerShape["sendTurn"] = Effect.fn("AgentController.sendTurn")(
@@ -646,21 +393,28 @@ const make = (options?: AgentControllerLiveOptions) =>
         const key = String(input.threadId);
         const active = sessions.get(key);
         if (!active) {
-          if (resolvedByThread.get(key)?.provider === ProviderDriverKind.make("codex")) {
+          const resolvedProvider = resolvedByThread.get(key)?.provider;
+          if (resolvedProvider && handlesWithAkeruRuntime(resolvedProvider)) {
             return yield* new AgentControllerRuntimeError({
               operation: "sendTurn",
-              detail: `Mastra session for thread '${input.threadId}' is not running.`,
+              detail: `Akeru session for thread '${input.threadId}' is not running.`,
             });
           }
-          return yield* legacyProviderBridge.sendTurn(input);
-        }
-        if (active.activeTurn) {
-          return yield* new AgentControllerRuntimeError({
-            operation: "sendTurn",
-            detail: `Mastra session for thread '${input.threadId}' already has an active turn.`,
+          const shouldSeed = legacyContextSeeded.get(key) !== true;
+          const contextPrompt =
+            shouldSeed && input.conversationContext
+              ? yield* prepareContext(input.conversationContext, false)
+              : undefined;
+          const result = yield* legacyProviderBridge.sendTurn({
+            ...input,
+            ...(contextPrompt
+              ? { input: `${contextPrompt}\n\nCurrent user message:\n${input.input ?? ""}` }
+              : {}),
           });
+          legacyContextSeeded.set(key, true);
+          return result;
         }
-        const attachmentFiles = yield* Effect.forEach(input.attachments ?? [], (attachment) => {
+        const attachmentLines = yield* Effect.forEach(input.attachments ?? [], (attachment) => {
           const path = resolveAttachmentPath({
             attachmentsDir: config.attachmentsDir,
             attachment,
@@ -673,198 +427,149 @@ const make = (options?: AgentControllerLiveOptions) =>
               }),
             );
           }
-          return Effect.try({
-            try: () => ({
-              file: {
-                data: NodeFS.readFileSync(path).toString("base64"),
-                mediaType: attachment.mimeType,
-                filename: attachment.name,
-              },
-              pathLine: `[Attached image "${attachment.name}" is saved at: ${path}]`,
-            }),
-            catch: (cause) =>
-              new AgentControllerRuntimeError({
-                operation: "sendTurn.attachments",
-                detail: `Could not read attachment '${attachment.id}'.`,
-                cause,
-              }),
-          });
+          return Effect.succeed(`[Attached file "${attachment.name}" is saved at: ${path}]`);
         });
-        const content = [input.input, ...attachmentFiles.map(({ pathLine }) => pathLine)]
+        const current = [input.input, ...attachmentLines]
           .filter((part): part is string => typeof part === "string" && part.length > 0)
           .join("\n\n");
-        const files = attachmentFiles.map(({ file }) => file);
-        const turnId = TurnId.make(`mastra-turn-${NodeCrypto.randomUUID()}`);
-        active.activeTurn = {
-          turnId,
-          assistantItemId: RuntimeItemId.make(`mastra-answer-${turnId}`),
-          assistantLength: 0,
-          assistantStarted: false,
-          assistantCompleted: false,
-          waiting: false,
-          finished: false,
-        };
-        active.status = "running";
-        publish({
-          ...baseEvent(input.threadId, active, turnId),
-          type: "turn.started",
-          payload: { model: active.model },
-        });
-        publishSessionState(input.threadId, active, "running");
-        void active.session
-          .sendMessage({ content, ...(files.length > 0 ? { files } : {}) })
-          .then(() => {
-            if (!active.activeTurn?.waiting) {
-              finishTurn(input.threadId, active, "completed");
-            }
-          })
-          .catch((cause: unknown) => {
-            const detail = failureDetail(cause);
-            publish({
-              ...baseEvent(input.threadId, active, turnId),
-              type: "runtime.error",
-              payload: { message: detail, class: "provider_error" },
-            });
-            finishTurn(input.threadId, active, "failed", detail);
+        let contextPrompt =
+          !active.session.hasConversationContext() && input.conversationContext
+            ? yield* prepareContext(input.conversationContext)
+            : undefined;
+        let target = sessions.get(key);
+        if (
+          target &&
+          target !== active &&
+          !target.session.hasConversationContext() &&
+          !contextPrompt &&
+          input.conversationContext
+        ) {
+          contextPrompt = yield* prepareContext(input.conversationContext);
+          target = sessions.get(key);
+        }
+        if (!target) {
+          return yield* new AgentControllerRuntimeError({
+            operation: "sendTurn",
+            detail: `Akeru session for thread '${input.threadId}' stopped while preparing the turn.`,
           });
-        return { threadId: input.threadId, turnId };
+        }
+        const result = yield* Effect.try({
+          try: () =>
+            target.session.send({
+              ...input,
+              input: contextPrompt
+                ? `${contextPrompt}\n\nCurrent user message:\n${current}`
+                : current,
+              conversationContext: undefined,
+              attachments: undefined,
+            }),
+          catch: (cause) =>
+            new AgentControllerRuntimeError({
+              operation: "sendTurn",
+              detail: failureDetail(cause),
+              cause,
+            }),
+        });
+        return result;
       },
     );
 
     const interruptTurn: AgentControllerShape["interruptTurn"] = Effect.fn(
       "AgentController.interruptTurn",
     )(function* (input) {
-      const key = String(input.threadId);
-      const active = sessions.get(key);
-      if (!active) {
-        if (
-          usesMastraCode(resolvedByThread.get(key)?.provider ?? ProviderDriverKind.make("codex"))
-        ) {
-          return;
-        }
-        return yield* legacyProviderBridge.interruptTurn(input);
-      }
-      active.session.abort();
-      finishTurn(input.threadId, active, "interrupted");
+      const active = sessions.get(String(input.threadId));
+      if (!active) return yield* legacyProviderBridge.interruptTurn(input);
+      active.session.interrupt();
     });
 
     const respondToRequest: AgentControllerShape["respondToRequest"] = Effect.fn(
       "AgentController.respondToRequest",
     )(function* (input) {
-      const key = String(input.threadId);
-      const active = sessions.get(key);
-      if (!active) {
-        if (
-          usesMastraCode(resolvedByThread.get(key)?.provider ?? ProviderDriverKind.make("codex"))
-        ) {
-          return;
-        }
-        return yield* legacyProviderBridge.respondToRequest(input);
-      }
-      const toolCallId = String(input.requestId);
-      const toolName = active.toolNames.get(toolCallId);
-      if (input.decision === "acceptForSession" && toolName) {
-        yield* runMastra("permissions.setForTool", () =>
-          active.session.permissions.setForTool({ toolName, policy: "allow" }),
-        );
-      }
-      if (active.activeTurn) active.activeTurn.waiting = false;
-      active.session.respondToToolApproval({
-        toolCallId,
-        decision: approvalDecision(input.decision),
+      const active = sessions.get(String(input.threadId));
+      if (!active) return yield* legacyProviderBridge.respondToRequest(input);
+      yield* Effect.try({
+        try: () => active.session.respondToRequest(input),
+        catch: (cause) =>
+          new AgentControllerRuntimeError({
+            operation: "respondToRequest",
+            detail: failureDetail(cause),
+            cause,
+          }),
       });
-      publish({
-        ...baseEvent(input.threadId, active, active.activeTurn?.turnId),
-        requestId: RuntimeRequestId.make(toolCallId),
-        type: "request.resolved",
-        payload: { requestType: "dynamic_tool_call" as const, decision: input.decision },
-      });
-      publishSessionState(input.threadId, active, "running");
     });
 
     const respondToUserInput: AgentControllerShape["respondToUserInput"] = Effect.fn(
       "AgentController.respondToUserInput",
     )(function* (input) {
-      const key = String(input.threadId);
-      const active = sessions.get(key);
-      if (!active) {
-        if (
-          usesMastraCode(resolvedByThread.get(key)?.provider ?? ProviderDriverKind.make("codex"))
-        ) {
-          return;
-        }
-        return yield* legacyProviderBridge.respondToUserInput(input);
-      }
-      const toolCallId = String(input.requestId);
-      if (active.activeTurn) active.activeTurn.waiting = false;
-      yield* runMastra("respondToToolSuspension", () =>
-        active.session.respondToToolSuspension({ toolCallId, resumeData: input.answers }),
-      );
-      publish({
-        ...baseEvent(input.threadId, active, active.activeTurn?.turnId),
-        requestId: RuntimeRequestId.make(toolCallId),
-        type: "user-input.resolved",
-        payload: { answers: input.answers },
+      const active = sessions.get(String(input.threadId));
+      if (!active) return yield* legacyProviderBridge.respondToUserInput(input);
+      yield* Effect.try({
+        try: () => active.session.respondToUserInput(input),
+        catch: (cause) =>
+          new AgentControllerRuntimeError({
+            operation: "respondToUserInput",
+            detail: failureDetail(cause),
+            cause,
+          }),
       });
-      publishSessionState(input.threadId, active, "running");
     });
 
     const stopSession: AgentControllerShape["stopSession"] = Effect.fn(
       "AgentController.stopSession",
     )(function* (input) {
       const key = String(input.threadId);
-      const active = sessions.get(key);
-      if (!active) {
-        const legacySessions = yield* legacyProviderBridge.listSessions();
-        if (legacySessions.some((session) => session.threadId === input.threadId)) {
-          return yield* legacyProviderBridge.stopSession(input);
-        }
-        if (
-          usesMastraCode(resolvedByThread.get(key)?.provider ?? ProviderDriverKind.make("codex"))
-        ) {
-          return;
-        }
-        return yield* legacyProviderBridge.stopSession(input);
+      const stopped = yield* mutationLock.withPermits(1)(
+        Effect.sync(() => {
+          nextSessionVersion(key);
+          pendingSessionStarts.get(key)?.abort(new Error("Akeru session start stopped."));
+          pendingSessionStarts.delete(key);
+          const active = sessions.get(key);
+          sessions.delete(key);
+          const provider = resolvedByThread.get(key)?.provider;
+          return {
+            active,
+            akeru: provider !== undefined && handlesWithAkeruRuntime(provider),
+          };
+        }),
+      );
+      const stoppedSession = stopped.active?.session;
+      if (stoppedSession) {
+        yield* run("session.close", () => stoppedSession.close());
+        return;
       }
-      active.session.abort();
-      active.unsubscribe();
-      publishSessionState(input.threadId, active, "stopped");
-      yield* runMastra("deleteSession", () => bundle.controller.deleteSession({ resourceId: key }));
-      yield* disconnectMcpManager(key);
-      yield* disconnectWorkspace(key);
-      sessions.delete(key);
+      if (stopped.akeru) return;
+      const result = yield* legacyProviderBridge.stopSession(input);
+      legacyContextSeeded.delete(key);
+      return result;
     });
 
     const rollbackConversation: AgentControllerShape["rollbackConversation"] = (input) => {
       const resolved = resolvedByThread.get(String(input.threadId));
-      if (!sessions.has(String(input.threadId)) && !resolved) {
-        return legacyProviderBridge.rollbackConversation(input);
+      if (resolved && handlesWithAkeruRuntime(resolved.provider)) {
+        return Effect.fail(
+          new AgentControllerRuntimeError({
+            operation: "rollbackConversation",
+            detail: `Akeru conversation rollback is not available for thread '${input.threadId}'.`,
+          }),
+        );
       }
-      if (resolved && !usesMastraCode(resolved.provider)) {
-        return legacyProviderBridge.rollbackConversation(input);
-      }
-      return Effect.fail(
-        new AgentControllerRuntimeError({
-          operation: "rollbackConversation",
-          detail: `Mastra conversation rollback is not available for thread '${input.threadId}'.`,
-        }),
-      );
+      return legacyProviderBridge.rollbackConversation(input);
     };
 
     yield* Effect.addFinalizer(() =>
       Effect.gen(function* () {
-        for (const [threadId, active] of sessions) {
-          active.session.abort();
-          active.unsubscribe();
-          yield* runMastra("deleteSession", () =>
-            bundle.controller.deleteSession({ resourceId: threadId }),
-          ).pipe(Effect.ignoreCause({ log: true }));
-          yield* disconnectMcpManager(threadId);
-          yield* disconnectWorkspace(threadId);
+        for (const active of sessions.values()) {
+          yield* run("session.close", () => active.session.close()).pipe(
+            Effect.ignoreCause({ log: true }),
+          );
         }
         sessions.clear();
-        bundle.destroy();
-        yield* runMastra("destroy", () => bundle.controller.destroy()).pipe(
+        for (const controller of pendingSessionStarts.values()) {
+          controller.abort(new Error("Agent controller stopped."));
+        }
+        pendingSessionStarts.clear();
+        legacyContextSeeded.clear();
+        yield* run("memory.destroy", () => memory.destroy()).pipe(
           Effect.ignoreCause({ log: true }),
         );
       }),
@@ -882,9 +587,7 @@ const make = (options?: AgentControllerLiveOptions) =>
       listSessions: () =>
         Effect.map(legacyProviderBridge.listSessions(), (legacySessions) => [
           ...legacySessions,
-          ...[...sessions.entries()].map(([threadId, active]) =>
-            toProviderSession(ThreadIdBrand(threadId), active),
-          ),
+          ...[...sessions.values()].map((active) => active.session.snapshot()),
         ]),
       rollbackConversation,
       uploadFeedback: legacyProviderBridge.uploadFeedback,
@@ -893,34 +596,6 @@ const make = (options?: AgentControllerLiveOptions) =>
       },
     });
   });
-
-function ThreadIdBrand(value: string): ThreadId {
-  return value as ThreadId;
-}
-
-function approvalDecision(
-  decision: ProviderApprovalDecision,
-): "approve" | "decline" | "always_allow_category" {
-  if (decision === "decline" || decision === "cancel") return "decline";
-  if (decision === "acceptAlways") return "always_allow_category";
-  return "approve";
-}
-
-function toProviderSession(threadId: ThreadId, active: ActiveSession): ProviderSession {
-  return {
-    provider: active.provider,
-    providerInstanceId: active.providerInstanceId,
-    status: active.status,
-    runtimeMode: active.runtimeMode,
-    ...(active.cwd ? { cwd: active.cwd } : {}),
-    model: active.model,
-    threadId,
-    mcpServerIds: active.mcpServerIds,
-    ...(active.activeTurn ? { activeTurnId: active.activeTurn.turnId } : {}),
-    createdAt: active.createdAt,
-    updatedAt: nowIso(),
-  };
-}
 
 export const makeAgentControllerLive = (options?: AgentControllerLiveOptions) =>
   Layer.effect(AgentController, make(options));

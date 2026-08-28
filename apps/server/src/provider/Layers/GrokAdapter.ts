@@ -572,7 +572,7 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
 
           const mcpSession = McpProviderSession.readMcpProviderSession(input.threadId);
           const mcpServers = [
-            ...toAcpMcpServers(input.mcpServers ?? []),
+            ...toAcpMcpServers(input.mcpServers ?? [], input.mcpServerAuthorizationHeaders),
             ...(mcpSession
               ? [
                   {

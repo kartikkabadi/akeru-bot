@@ -42,6 +42,7 @@ import type * as EffectAcpSchema from "effect-acp/schema";
 
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
 import { ServerConfig } from "../../config.ts";
+import { buildAkeruModelIdentity } from "../AkeruAgentInstructions.ts";
 import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
 import { toAcpMcpServers } from "../McpServerConfig.ts";
 import {
@@ -534,7 +535,7 @@ export function makeCursorAdapter(
 
           const mcpSession = McpProviderSession.readMcpProviderSession(input.threadId);
           const mcpServers = [
-            ...toAcpMcpServers(input.mcpServers ?? []),
+            ...toAcpMcpServers(input.mcpServers ?? [], input.mcpServerAuthorizationHeaders),
             ...(mcpSession
               ? [
                   {
@@ -919,6 +920,14 @@ export function makeCursorAdapter(
     const sendTurn: CursorAdapterShape["sendTurn"] = (input) =>
       Effect.gen(function* () {
         const ctx = yield* requireSession(input.threadId);
+        const message = input.input?.trim();
+        if (!message && (!input.attachments || input.attachments.length === 0)) {
+          return yield* new ProviderAdapterValidationError({
+            provider: PROVIDER,
+            operation: "sendTurn",
+            issue: "Turn requires non-empty text or attachments.",
+          });
+        }
         // A sendTurn while a prompt is in flight is a steer: the agent folds
         // the new prompt into the ongoing work, so the active turn id is
         // reused instead of opening a new turn.
@@ -969,10 +978,13 @@ export function makeCursorAdapter(
             });
           }
 
-          const promptParts: Array<EffectAcpSchema.ContentBlock> = [];
-          if (input.input?.trim()) {
-            promptParts.push({ type: "text", text: input.input.trim() });
-          }
+          const modelIdentity = buildAkeruModelIdentity(
+            model ? `cursor/${resolvedModel}` : "cursor/unknown",
+          );
+          const promptParts: Array<EffectAcpSchema.ContentBlock> = [
+            { type: "text", text: modelIdentity },
+            ...(message ? [{ type: "text" as const, text: message }] : []),
+          ];
           if (input.attachments && input.attachments.length > 0) {
             for (const attachment of input.attachments) {
               const attachmentPath = resolveAttachmentPath({
@@ -1003,14 +1015,6 @@ export function makeCursorAdapter(
                 mimeType: attachment.mimeType,
               });
             }
-          }
-
-          if (promptParts.length === 0) {
-            return yield* new ProviderAdapterValidationError({
-              provider: PROVIDER,
-              operation: "sendTurn",
-              issue: "Turn requires non-empty text or attachments.",
-            });
           }
 
           const result = yield* ctx.acp

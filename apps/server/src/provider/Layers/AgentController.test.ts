@@ -1,13 +1,7 @@
-// @effect-diagnostics globalDate:off nodeBuiltinImport:off preferSchemaOverJson:off
-import * as NodeFS from "node:fs";
-import * as NodeOS from "node:os";
-import * as NodePath from "node:path";
-
+// @effect-diagnostics nodeBuiltinImport:off
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import type { AgentControllerEvent, MastraDBMessage, Session } from "@mastra/core/agent-controller";
-import { LocalFilesystem, LocalSandbox, Workspace } from "@mastra/core/workspace";
+import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import {
-  ApprovalRequestId,
   McpServerId,
   ProviderDriverKind,
   ProviderInstanceId,
@@ -24,66 +18,43 @@ import * as Stream from "effect/Stream";
 import { assert, describe, expect, vi } from "vite-plus/test";
 
 import { ServerConfig } from "../../config.ts";
+import type { AkeruModelRunner } from "../AkeruModelRunner.ts";
 import { AgentController } from "../Services/AgentController.ts";
 import { LegacyProviderBridge } from "../Services/LegacyProviderBridge.ts";
 import type { ProviderServiceShape } from "../Services/ProviderService.ts";
-import {
-  createAkeruMastraAuthStorage,
-  makeAgentControllerLive,
-  toMcpServerConfigs,
-  type AgentControllerLiveOptions,
-} from "./AgentController.ts";
+import { makeAgentControllerLive, type AgentControllerLiveOptions } from "./AgentController.ts";
 
-const codexThreadId = ThreadId.make("thread-mastra-codex");
-const claudeThreadId = ThreadId.make("thread-legacy-claude");
+const threadId = ThreadId.make("thread-akeru-controller");
 const codexInstanceId = ProviderInstanceId.make("codex");
-const claudeInstanceId = ProviderInstanceId.make("claudeAgent");
 
-const codexSelection = {
-  instanceId: codexInstanceId,
-  model: "gpt-5.6-sol",
-};
-
-function makeProviderSession(
-  threadId: ThreadId,
-  provider: "codex" | "claudeAgent",
-): ProviderSession {
+function providerSession(provider: ProviderDriverKind): ProviderSession {
   return {
-    provider: ProviderDriverKind.make(provider),
-    providerInstanceId: ProviderInstanceId.make(provider),
+    provider,
+    providerInstanceId: ProviderInstanceId.make(String(provider)),
     threadId,
     status: "ready",
-    runtimeMode: "full-access",
-    model: provider === "codex" ? "gpt-5.6-sol" : "claude-fable-5",
+    runtimeMode: "approval-required",
+    model: "model",
     createdAt: "2026-01-01T00:00:00.000Z",
     updatedAt: "2026-01-01T00:00:00.000Z",
   };
 }
 
 function makeBridge() {
-  const startSession = vi.fn<ProviderServiceShape["startSession"]>((threadId, input) =>
-    Effect.succeed(
-      makeProviderSession(threadId, String(input.provider) === "codex" ? "codex" : "claudeAgent"),
-    ),
+  const startSession = vi.fn<ProviderServiceShape["startSession"]>((_threadId, input) =>
+    Effect.succeed(providerSession(input.provider ?? ProviderDriverKind.make("cursor"))),
   );
   const sendTurn = vi.fn<ProviderServiceShape["sendTurn"]>((input) =>
     Effect.succeed({ threadId: input.threadId, turnId: TurnId.make("legacy-turn") }),
   );
-  const interruptTurn = vi.fn<ProviderServiceShape["interruptTurn"]>(() => Effect.void);
-  const respondToRequest = vi.fn<ProviderServiceShape["respondToRequest"]>(() => Effect.void);
-  const respondToUserInput = vi.fn<ProviderServiceShape["respondToUserInput"]>(() => Effect.void);
-  const stopSession = vi.fn<ProviderServiceShape["stopSession"]>(() => Effect.void);
-  const rollbackConversation = vi.fn<ProviderServiceShape["rollbackConversation"]>(
-    () => Effect.void,
-  );
   const service: ProviderServiceShape = {
     startSession,
     sendTurn,
-    interruptTurn,
-    respondToRequest,
-    respondToUserInput,
-    stopSession,
-    rollbackConversation,
+    interruptTurn: () => Effect.void,
+    respondToRequest: () => Effect.void,
+    respondToUserInput: () => Effect.void,
+    stopSession: () => Effect.void,
+    rollbackConversation: () => Effect.void,
     listSessions: () => Effect.succeed([]),
     getCapabilities: () => Effect.succeed({ sessionModelSwitch: "in-session" }),
     getInstanceInfo: (instanceId) => {
@@ -99,622 +70,371 @@ function makeBridge() {
         },
       });
     },
-    uploadFeedback: (input) => Effect.succeed({ feedbackId: `feedback-${String(input.threadId)}` }),
+    uploadFeedback: (input) => Effect.succeed({ feedbackId: `feedback-${input.threadId}` }),
     streamEvents: Stream.empty,
   };
-  return {
-    service,
-    startSession,
-    sendTurn,
-    interruptTurn,
-    respondToRequest,
-    respondToUserInput,
-    stopSession,
-    rollbackConversation,
-  };
+  return { service, startSession, sendTurn };
 }
 
-function makeMastraHarness() {
-  const harnessOptions: Array<
-    Parameters<NonNullable<AgentControllerLiveOptions["makeMastraHarness"]>>[0]
-  > = [];
-  const listeners = new Set<(event: AgentControllerEvent) => void>();
-  let modeId = "build";
-  let modelId = "openai/gpt-5.6-sol";
-  let resolveSend: (() => void) | undefined;
-  const sendMessage = vi.fn(
-    () =>
-      new Promise<void>((resolve) => {
-        resolveSend = resolve;
+function makeOptions(runner: AkeruModelRunner): AgentControllerLiveOptions {
+  return {
+    modelRunner: runner,
+    prepareMcpRuntime: async (servers) => ({ servers, authorizationHeaders: {} }),
+    makeConversationMemory: async () => ({
+      prepare: async (context) => ({
+        prompt: `History:${context.messages.map(({ text }) => text).join("|")}`,
+        observed: false,
+        degraded: false,
       }),
-  );
-  const session = {
-    state: { set: vi.fn(async () => undefined) },
-    mode: {
-      get: () => modeId,
-      switch: vi.fn(async ({ modeId: next }: { readonly modeId: string }) => {
-        modeId = next;
-      }),
-    },
-    model: {
-      get: () => modelId,
-      switch: vi.fn(async ({ modelId: next }: { readonly modelId: string }) => {
-        modelId = next;
-      }),
-    },
-    permissions: {
-      setForCategory: vi.fn(async () => undefined),
-      setForTool: vi.fn(async () => undefined),
-    },
-    subscribe: vi.fn((listener: (event: AgentControllerEvent) => void) => {
-      listeners.add(listener);
-      return () => listeners.delete(listener);
+      destroy: async () => undefined,
     }),
-    sendMessage,
-    abort: vi.fn(),
-    respondToToolApproval: vi.fn(),
-    respondToToolSuspension: vi.fn(async () => undefined),
-  } as unknown as Session<Record<string, unknown>>;
-  const createSession = vi.fn(async () => session as never);
-  const deleteSession = vi.fn(async () => true);
-  const destroy = vi.fn(async () => undefined);
-  const factory: NonNullable<AgentControllerLiveOptions["makeMastraHarness"]> = async (options) => {
-    harnessOptions.push(options);
-    return {
-      controller: {
-        init: vi.fn(async () => undefined),
-        createSession,
-        deleteSession,
-        destroy,
-      },
-      destroy: vi.fn(),
-    };
-  };
-  const emit = (event: AgentControllerEvent) => {
-    for (const listener of listeners) listener(event);
-  };
-  return {
-    factory,
-    harnessOptions,
-    session,
-    createSession,
-    deleteSession,
-    sendMessage,
-    emit,
-    finishSend: () => resolveSend?.(),
+    makeToolProviders: async () => [],
   };
 }
 
-function assistantMessage(text: string): MastraDBMessage {
-  return {
-    id: "assistant-message",
-    role: "assistant",
-    createdAt: new Date("2026-01-01T00:00:00.000Z"),
-    content: {
-      format: 2,
-      parts: [{ type: "text", text }],
-    },
-    threadId: String(codexThreadId),
-    resourceId: String(codexThreadId),
-  } as MastraDBMessage;
-}
-
-function makeLayer(
-  bridge: ProviderServiceShape,
-  factory: NonNullable<AgentControllerLiveOptions["makeMastraHarness"]>,
-  makeMcpManager?: NonNullable<AgentControllerLiveOptions["makeMcpManager"]>,
-  baseDir?: string,
-) {
-  return makeAgentControllerLive({
-    makeMastraHarness: factory,
-    ...(makeMcpManager ? { makeMcpManager } : {}),
-  }).pipe(
-    Layer.provide(
-      Layer.merge(
-        Layer.succeed(LegacyProviderBridge, bridge),
-        ServerConfig.layerTest(
-          process.cwd(),
-          baseDir ?? { prefix: "akeru-mastra-controller-test-" },
-        ).pipe(Layer.provide(NodeServices.layer)),
-      ),
-    ),
-  );
-}
-
-function provideController<A, E>(
+function provide<A, E>(
   effect: Effect.Effect<A, E, AgentController>,
   bridge: ProviderServiceShape,
-  factory: NonNullable<AgentControllerLiveOptions["makeMastraHarness"]>,
-  makeMcpManager?: NonNullable<AgentControllerLiveOptions["makeMcpManager"]>,
-  baseDir?: string,
+  options: AgentControllerLiveOptions,
 ) {
   return effect.pipe(
-    Effect.provide(makeLayer(bridge, factory, makeMcpManager, baseDir)),
+    Effect.provide(
+      makeAgentControllerLive(options).pipe(
+        Layer.provide(
+          Layer.mergeAll(
+            Layer.succeed(LegacyProviderBridge, bridge),
+            Layer.succeed(HostProcessPlatform, "linux"),
+            ServerConfig.layerTest(process.cwd(), {
+              prefix: "akeru-controller-test-",
+            }).pipe(Layer.provide(NodeServices.layer)),
+          ),
+        ),
+      ),
+    ),
     Effect.orDie,
   );
 }
 
 function resolveCodex(controller: AgentController["Service"]) {
   return controller.resolveEngine({
-    threadId: codexThreadId,
+    threadId,
     engine: { provider: "codex", model: "gpt-5.6-sol" },
-    fallback: codexSelection,
+    fallback: { instanceId: codexInstanceId, model: "gpt-5.6-sol" },
     mode: "default",
   });
 }
 
-describe("toMcpServerConfigs", () => {
-  it("converts only the bot's filtered MCP registrations for Mastra", () => {
-    expect(
-      toMcpServerConfigs([
-        {
-          id: McpServerId.make("builtin-exa"),
-          name: "Exa",
-          transport: "url",
-          url: "https://mcp.exa.ai/mcp",
-          enabled: true,
-          createdAt: "2026-01-01T00:00:00.000Z",
-          updatedAt: "2026-01-01T00:00:00.000Z",
-        },
-        {
-          id: McpServerId.make("local-tools"),
-          name: "Local tools",
-          transport: "stdio",
-          command: "bunx",
-          args: ["local-tools"],
-          enabled: true,
-          createdAt: "2026-01-01T00:00:00.000Z",
-          updatedAt: "2026-01-01T00:00:00.000Z",
-        },
-      ]),
-    ).toEqual({
-      "builtin-exa": { url: "https://mcp.exa.ai/mcp" },
-      "local-tools": { command: "bunx", args: ["local-tools"] },
-    });
-  });
-});
-
 describe("AgentControllerLive", () => {
-  it.effect("reads Akeru subscription credentials through Mastra AuthStorage", () =>
-    Effect.gen(function* () {
-      const config = yield* ServerConfig;
-      const authPath = NodePath.join(config.secretsDir, "subscription-auth.json");
-      yield* Effect.sync(() => {
-        NodeFS.mkdirSync(config.secretsDir, { recursive: true });
-        NodeFS.writeFileSync(
-          authPath,
-          JSON.stringify({
-            "openai-codex": {
-              type: "oauth",
-              access: "subscription-access",
-              refresh: "subscription-refresh",
-              expires: 4_102_444_800_000,
-              accountId: "account-123",
-            },
-          }),
-        );
-      });
-
-      const auth = createAkeruMastraAuthStorage(config.secretsDir);
-      assert.deepEqual(auth.get("openai-codex"), {
-        type: "oauth",
-        access: "subscription-access",
-        refresh: "subscription-refresh",
-        expires: 4_102_444_800_000,
-        accountId: "account-123",
-      });
-    }).pipe(
-      Effect.provide(
-        ServerConfig.layerTest(process.cwd(), { prefix: "akeru-mastra-auth-test-" }).pipe(
-          Layer.provide(NodeServices.layer),
-        ),
-      ),
-    ),
-  );
-
-  it.effect("passes Akeru subscription auth to the custom memory-free harness", () => {
+  it.effect("routes Codex through the Akeru runtime and emits canonical events", () => {
     const bridge = makeBridge();
-    const mastra = makeMastraHarness();
-    return provideController(
-      Effect.gen(function* () {
-        yield* AgentController;
-        const options = mastra.harnessOptions[0];
-        assert.isDefined(options);
-        assert.isDefined(options.authStorage);
-        assert.notProperty(options, "memory");
-      }),
-      bridge.service,
-      mastra.factory,
-    );
-  });
-
-  it.effect("boots a real Mastra Code controller and creates a Codex session", () => {
-    const bridge = makeBridge();
-    const layer = makeAgentControllerLive().pipe(
-      Layer.provide(
-        Layer.merge(
-          Layer.succeed(LegacyProviderBridge, bridge.service),
-          ServerConfig.layerTest(process.cwd(), {
-            prefix: "akeru-mastra-real-controller-test-",
-          }).pipe(Layer.provide(NodeServices.layer)),
-        ),
-      ),
-    );
-
-    return Effect.gen(function* () {
-      const controller = yield* AgentController;
-      yield* resolveCodex(controller);
-      const session = yield* controller.startSession(codexThreadId, {
-        threadId: codexThreadId,
-        provider: ProviderDriverKind.make("codex"),
-        providerInstanceId: codexInstanceId,
-        cwd: process.cwd(),
-        modelSelection: codexSelection,
-        runtimeMode: "full-access",
-      });
-
-      assert.equal(session.provider, "codex");
-      assert.equal(session.model, "gpt-5.6-sol");
-      yield* controller.stopSession({ threadId: codexThreadId });
-      expect(bridge.startSession).not.toHaveBeenCalled();
-    }).pipe(Effect.provide(layer), Effect.orDie);
-  });
-
-  it.effect("runs Codex turns through Mastra Session.sendMessage and normalizes events", () => {
-    const bridge = makeBridge();
-    const mastra = makeMastraHarness();
-    return provideController(
+    const runner: AkeruModelRunner = {
+      stream: async function* () {
+        yield { type: "text-start", id: "answer" };
+        yield { type: "text-delta", id: "answer", text: "custom" };
+        yield { type: "text-end", id: "answer" };
+        yield { type: "response-messages", messages: [] };
+      },
+    };
+    return provide(
       Effect.gen(function* () {
         const controller = yield* AgentController;
         yield* resolveCodex(controller);
-        const session = yield* controller.startSession(codexThreadId, {
-          threadId: codexThreadId,
-          provider: ProviderDriverKind.make("codex"),
-          providerInstanceId: codexInstanceId,
-          cwd: process.cwd(),
-          modelSelection: codexSelection,
-          runtimeMode: "full-access",
-        });
-        assert.equal(session.provider, "codex");
-
         const events: ProviderRuntimeEvent[] = [];
-        const eventsFiber = yield* controller.streamEvents.pipe(
-          Stream.runForEach((event) =>
-            Effect.sync(() => {
-              events.push(event);
-            }),
-          ),
+        const fiber = yield* controller.streamEvents.pipe(
+          Stream.runForEach((event) => Effect.sync(() => events.push(event))),
           Effect.forkChild({ startImmediately: true }),
         );
         yield* Effect.yieldNow;
-        yield* controller.sendTurn({ threadId: codexThreadId, input: "Reply once." });
-        mastra.emit({
-          type: "message_update",
-          message: assistantMessage("Mastra"),
-        } as AgentControllerEvent);
-        mastra.emit({
-          type: "message_end",
-          message: assistantMessage("Mastra answer"),
-        } as AgentControllerEvent);
-        mastra.emit({ type: "agent_end", reason: "complete" } as AgentControllerEvent);
-        mastra.finishSend();
-        yield* Effect.yieldNow;
-        yield* Effect.yieldNow;
-        yield* Fiber.interrupt(eventsFiber);
-
-        assert.deepEqual(
-          events.slice(0, 7).map((event) => event.type),
-          [
-            "turn.started",
-            "session.state.changed",
-            "item.started",
-            "content.delta",
-            "content.delta",
-            "item.completed",
-            "turn.completed",
-          ],
-        );
-        assert.equal(
-          events
-            .filter((event) => event.type === "content.delta")
-            .map((event) => event.payload.delta)
-            .join(""),
-          "Mastra answer",
-        );
-        expect(mastra.sendMessage).toHaveBeenCalledWith({ content: "Reply once." });
-        expect(bridge.startSession).not.toHaveBeenCalled();
-        expect(bridge.sendTurn).not.toHaveBeenCalled();
-      }),
-      bridge.service,
-      mastra.factory,
-    );
-  });
-
-  it.effect("keeps a suspended Mastra turn active until tool input resumes", () => {
-    const bridge = makeBridge();
-    const mastra = makeMastraHarness();
-    return provideController(
-      Effect.gen(function* () {
-        const controller = yield* AgentController;
-        yield* resolveCodex(controller);
-        yield* controller.startSession(codexThreadId, {
-          threadId: codexThreadId,
+        const session = yield* controller.startSession(threadId, {
+          threadId,
           provider: ProviderDriverKind.make("codex"),
           providerInstanceId: codexInstanceId,
           cwd: process.cwd(),
-          modelSelection: codexSelection,
           runtimeMode: "approval-required",
         });
-        yield* controller.sendTurn({ threadId: codexThreadId, input: "Ask for input." });
-        mastra.emit({
-          type: "tool_suspended",
-          toolCallId: "tool-input-1",
-          toolName: "ask_user",
-          args: {},
-          suspendPayload: {},
-        } as AgentControllerEvent);
-        mastra.emit({ type: "agent_end", reason: "suspended" } as AgentControllerEvent);
-        mastra.finishSend();
-        yield* Effect.yieldNow;
-
-        const [waiting] = yield* controller.listSessions();
-        assert.isDefined(waiting?.activeTurnId);
-
-        yield* controller.respondToUserInput({
-          threadId: codexThreadId,
-          requestId: ApprovalRequestId.make("tool-input-1"),
-          answers: { answer: "Continue" },
-        });
-        mastra.emit({ type: "agent_end", reason: "complete" } as AgentControllerEvent);
-
-        const [completed] = yield* controller.listSessions();
-        assert.isUndefined(completed?.activeTurnId);
-        expect(mastra.session.respondToToolSuspension).toHaveBeenCalledWith({
-          toolCallId: "tool-input-1",
-          resumeData: { answer: "Continue" },
-        });
+        assert.equal(session.provider, "codex");
+        yield* controller.sendTurn({ threadId, input: "Reply." });
+        yield* Effect.promise(() =>
+          vi.waitFor(() =>
+            expect(events.some((event) => event.type === "turn.completed")).toBe(true),
+          ),
+        );
+        expect(
+          events
+            .filter((event) => event.type === "content.delta")
+            .map((event) => event.payload.delta),
+        ).toEqual(["custom"]);
+        expect(bridge.startSession).not.toHaveBeenCalled();
+        expect(bridge.sendTurn).not.toHaveBeenCalled();
+        yield* Fiber.interrupt(fiber);
       }),
       bridge.service,
-      mastra.factory,
+      makeOptions(runner),
     );
   });
 
-  it.effect("reads persisted image attachments for Mastra turns", () => {
+  it.effect("prepares durable context once before the current message", () => {
     const bridge = makeBridge();
-    const mastra = makeMastraHarness();
-    const baseDir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "akeru-mastra-image-"));
-    const attachmentsDir = NodePath.join(baseDir, "userdata", "attachments");
-    NodeFS.mkdirSync(attachmentsDir, { recursive: true });
-    NodeFS.writeFileSync(NodePath.join(attachmentsDir, "image-1.png"), "image");
-
-    return provideController(
+    const messages: string[] = [];
+    const runner: AkeruModelRunner = {
+      stream: async function* (input) {
+        const last = input.messages.at(-1);
+        messages.push(typeof last?.content === "string" ? last.content : "");
+        yield { type: "response-messages", messages: [] };
+      },
+    };
+    return provide(
       Effect.gen(function* () {
         const controller = yield* AgentController;
         yield* resolveCodex(controller);
-        yield* controller.startSession(codexThreadId, {
-          threadId: codexThreadId,
+        yield* controller.startSession(threadId, {
+          threadId,
           provider: ProviderDriverKind.make("codex"),
           providerInstanceId: codexInstanceId,
-          cwd: process.cwd(),
-          modelSelection: codexSelection,
           runtimeMode: "full-access",
         });
         yield* controller.sendTurn({
-          threadId: codexThreadId,
-          input: "Inspect this image.",
-          attachments: [
-            {
-              type: "image",
-              id: "image-1",
-              name: "screenshot.png",
-              mimeType: "image/png",
-              sizeBytes: 5,
-            },
-          ],
+          threadId,
+          input: "Current",
+          conversationContext: {
+            resourceId: "memory-resource",
+            threadId,
+            messages: [
+              {
+                id: "prior",
+                role: "user",
+                text: "Prior",
+                createdAt: "2026-01-01T00:00:00.000Z",
+              },
+            ],
+          },
         });
-
-        expect(mastra.sendMessage).toHaveBeenCalledWith({
-          content: `Inspect this image.\n\n[Attached image "screenshot.png" is saved at: ${NodePath.join(attachmentsDir, "image-1.png")}]`,
-          files: [
-            {
-              data: "aW1hZ2U=",
-              mediaType: "image/png",
-              filename: "screenshot.png",
-            },
-          ],
-        });
-      }).pipe(
-        Effect.ensuring(
-          Effect.sync(() => NodeFS.rmSync(baseDir, { recursive: true, force: true })),
-        ),
-      ),
+        yield* Effect.promise(() => vi.waitFor(() => expect(messages).toHaveLength(1)));
+        expect(messages[0]).toBe("History:Prior\n\nCurrent user message:\nCurrent");
+      }),
       bridge.service,
-      mastra.factory,
-      undefined,
-      baseDir,
+      makeOptions(runner),
     );
   });
 
-  it.effect("attaches the globally installed MCP servers selected for the bot", () => {
+  it.effect("stores requested MCP ids when preparation returns an authenticated subset", () => {
     const bridge = makeBridge();
-    const mastra = makeMastraHarness();
-    const mcpManager = {
-      init: vi.fn(async () => undefined),
-      disconnect: vi.fn(async () => undefined),
-      getTools: vi.fn(() => ({ exa_search: {} })),
-    };
-    const makeMcpManagerMock = vi.fn((_dataDir, _configDir, _servers) => mcpManager as never);
-    const makeMcpManager: NonNullable<AgentControllerLiveOptions["makeMcpManager"]> =
-      makeMcpManagerMock;
-    const exaServer = {
-      id: McpServerId.make("builtin-exa"),
-      name: "Exa",
+    const runner: AkeruModelRunner = { stream: async function* () {} };
+    const mcpServer = {
+      id: McpServerId.make("required-oauth"),
+      name: "Required OAuth",
       transport: "url" as const,
-      url: "https://mcp.exa.ai/mcp",
+      url: "https://mcp.example.com",
+      authentication: "oauth" as const,
       enabled: true,
       createdAt: "2026-01-01T00:00:00.000Z",
       updatedAt: "2026-01-01T00:00:00.000Z",
     };
-
-    return provideController(
+    return provide(
       Effect.gen(function* () {
         const controller = yield* AgentController;
         yield* resolveCodex(controller);
-        const session = yield* controller.startSession(codexThreadId, {
-          threadId: codexThreadId,
+        const session = yield* controller.startSession(threadId, {
+          threadId,
           provider: ProviderDriverKind.make("codex"),
           providerInstanceId: codexInstanceId,
-          cwd: process.cwd(),
-          modelSelection: codexSelection,
           runtimeMode: "full-access",
-          mcpServers: [exaServer],
+          mcpServers: [mcpServer],
         });
 
-        assert.deepEqual(session.mcpServerIds, [exaServer.id]);
-        expect(makeMcpManagerMock).toHaveBeenCalledOnce();
-        expect(makeMcpManagerMock.mock.calls[0]?.[2]).toEqual({
-          "builtin-exa": { url: "https://mcp.exa.ai/mcp" },
-        });
-        expect(mcpManager.init).toHaveBeenCalledOnce();
-
-        yield* controller.stopSession({ threadId: codexThreadId });
-        expect(mcpManager.disconnect).toHaveBeenCalledOnce();
+        expect(session.mcpServerIds).toEqual([mcpServer.id]);
       }),
       bridge.service,
-      mastra.factory,
-      makeMcpManager,
+      {
+        ...makeOptions(runner),
+        prepareMcpRuntime: async () => ({ servers: [], authorizationHeaders: {} }),
+      },
     );
   });
 
-  it.effect("creates a remote Mastra workspace for the bot sandbox provider", () => {
+  it.effect("applies runtime-mode changes when reusing an Akeru session", () => {
     const bridge = makeBridge();
-    const mastra = makeMastraHarness();
-    const remote = new Workspace({
-      filesystem: new LocalFilesystem({ basePath: process.cwd() }),
-      sandbox: new LocalSandbox({ workingDirectory: process.cwd() }),
-    });
-    const makeRemoteWorkspace = vi.fn(async () => remote);
-    const layer = makeAgentControllerLive({
-      makeMastraHarness: mastra.factory,
-      makeRemoteWorkspace,
-    }).pipe(
-      Layer.provide(
-        Layer.merge(
-          Layer.succeed(LegacyProviderBridge, bridge.service),
-          ServerConfig.layerTest(process.cwd(), {
-            prefix: "akeru-mastra-remote-sandbox-test-",
-          }).pipe(Layer.provide(NodeServices.layer)),
-        ),
-      ),
-    );
-
-    return Effect.gen(function* () {
-      const controller = yield* AgentController;
-      yield* resolveCodex(controller);
-      yield* controller.startSession(codexThreadId, {
-        threadId: codexThreadId,
-        provider: ProviderDriverKind.make("codex"),
-        providerInstanceId: codexInstanceId,
-        cwd: process.cwd(),
-        modelSelection: codexSelection,
-        runtimeMode: "full-access",
-        botSandbox: "upstash",
-      });
-
-      expect(makeRemoteWorkspace).toHaveBeenCalledOnce();
-      expect(makeRemoteWorkspace).toHaveBeenCalledWith({
-        threadId: String(codexThreadId),
-        sandbox: "upstash",
-      });
-      expect(mastra.createSession.mock.calls[0]?.[0]).toMatchObject({ workspace: remote });
-      yield* controller.stopSession({ threadId: codexThreadId });
-    }).pipe(Effect.provide(layer), Effect.orDie);
-  });
-
-  it.effect("keeps Claude on the existing provider adapter", () => {
-    const bridge = makeBridge();
-    const mastra = makeMastraHarness();
-    return provideController(
-      Effect.gen(function* () {
-        const controller = yield* AgentController;
-        yield* controller.resolveEngine({
-          threadId: claudeThreadId,
-          engine: { provider: "claudeAgent", model: "claude-fable-5" },
-          fallback: codexSelection,
-          mode: "plan",
-        });
-        yield* controller.startSession(claudeThreadId, {
-          threadId: claudeThreadId,
-          provider: ProviderDriverKind.make("claudeAgent"),
-          providerInstanceId: claudeInstanceId,
-          cwd: process.cwd(),
-          runtimeMode: "approval-required",
-        });
-        const result = yield* controller.sendTurn({
-          threadId: claudeThreadId,
-          input: "Use Claude.",
-        });
-
-        assert.equal(result.turnId, TurnId.make("legacy-turn"));
-        expect(bridge.startSession).toHaveBeenCalledOnce();
-        expect(bridge.sendTurn).toHaveBeenCalledOnce();
-        expect(mastra.createSession).not.toHaveBeenCalled();
-        expect(mastra.sendMessage).not.toHaveBeenCalled();
-      }),
-      bridge.service,
-      mastra.factory,
-    );
-  });
-
-  it.effect("stops a legacy session after resolving the thread to Codex", () => {
-    const bridge = makeBridge();
-    const mastra = makeMastraHarness();
-    const legacySession = makeProviderSession(codexThreadId, "claudeAgent");
-    const service: ProviderServiceShape = {
-      ...bridge.service,
-      listSessions: () => Effect.succeed([legacySession]),
-    };
-
-    return provideController(
-      Effect.gen(function* () {
-        const controller = yield* AgentController;
-        yield* controller.resolveEngine({
-          threadId: codexThreadId,
-          engine: { provider: "claudeAgent", model: "claude-fable-5" },
-          fallback: codexSelection,
-          mode: "default",
-        });
-        yield* controller.resolveEngine({
-          threadId: codexThreadId,
-          engine: { provider: "codex", model: "gpt-5.6-sol" },
-          fallback: codexSelection,
-          mode: "default",
-        });
-        yield* controller.stopSession({ threadId: codexThreadId });
-
-        expect(bridge.stopSession).toHaveBeenCalledWith({ threadId: codexThreadId });
-      }),
-      service,
-      mastra.factory,
-    );
-  });
-
-  it.effect("does not fall back to the legacy Codex loop when its Mastra session is absent", () => {
-    const bridge = makeBridge();
-    const mastra = makeMastraHarness();
-    return provideController(
+    const runner: AkeruModelRunner = { stream: async function* () {} };
+    return provide(
       Effect.gen(function* () {
         const controller = yield* AgentController;
         yield* resolveCodex(controller);
-        const error = yield* controller
-          .sendTurn({ threadId: codexThreadId, input: "No legacy fallback." })
-          .pipe(Effect.flip);
+        yield* controller.startSession(threadId, {
+          threadId,
+          provider: ProviderDriverKind.make("codex"),
+          providerInstanceId: codexInstanceId,
+          runtimeMode: "full-access",
+        });
+        const updated = yield* controller.startSession(threadId, {
+          threadId,
+          provider: ProviderDriverKind.make("codex"),
+          providerInstanceId: codexInstanceId,
+          runtimeMode: "approval-required",
+        });
 
-        assert.equal(error._tag, "AgentControllerRuntimeError");
-        expect(bridge.sendTurn).not.toHaveBeenCalled();
+        expect(updated.runtimeMode).toBe("approval-required");
       }),
       bridge.service,
-      mastra.factory,
+      makeOptions(runner),
+    );
+  });
+
+  it.effect("keeps Cursor on its ACP-backed legacy bridge", () => {
+    const bridge = makeBridge();
+    const runner: AkeruModelRunner = { stream: async function* () {} };
+    return provide(
+      Effect.gen(function* () {
+        const controller = yield* AgentController;
+        yield* controller.resolveEngine({
+          threadId,
+          engine: { provider: "cursor", model: "cursor-model" },
+          fallback: {
+            instanceId: ProviderInstanceId.make("cursor"),
+            model: "cursor-model",
+          },
+          mode: "default",
+        });
+        yield* controller.startSession(threadId, {
+          threadId,
+          provider: ProviderDriverKind.make("cursor"),
+          providerInstanceId: ProviderInstanceId.make("cursor"),
+          runtimeMode: "approval-required",
+        });
+        yield* controller.sendTurn({ threadId, input: "Cursor" });
+        expect(bridge.startSession).toHaveBeenCalledOnce();
+        expect(bridge.sendTurn).toHaveBeenCalledOnce();
+      }),
+      bridge.service,
+      makeOptions(runner),
+    );
+  });
+
+  it.effect("does not hold the global session lock while tools initialize", () => {
+    const bridge = makeBridge();
+    const runner: AkeruModelRunner = { stream: async function* () {} };
+    const secondThreadId = ThreadId.make("thread-akeru-controller-second");
+    let releaseFirst!: () => void;
+    let markFirstEntered!: () => void;
+    const firstEntered = new Promise<void>((resolve) => {
+      markFirstEntered = resolve;
+    });
+    const release = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    return provide(
+      Effect.gen(function* () {
+        const controller = yield* AgentController;
+        yield* resolveCodex(controller);
+        yield* controller.resolveEngine({
+          threadId: secondThreadId,
+          engine: { provider: "codex", model: "gpt-5.6-sol" },
+          fallback: { instanceId: codexInstanceId, model: "gpt-5.6-sol" },
+          mode: "default",
+        });
+        const first = yield* controller
+          .startSession(threadId, {
+            threadId,
+            provider: ProviderDriverKind.make("codex"),
+            providerInstanceId: codexInstanceId,
+            runtimeMode: "full-access",
+          })
+          .pipe(Effect.forkChild({ startImmediately: true }));
+        yield* Effect.promise(() => firstEntered);
+
+        const second = yield* controller.startSession(secondThreadId, {
+          threadId: secondThreadId,
+          provider: ProviderDriverKind.make("codex"),
+          providerInstanceId: codexInstanceId,
+          runtimeMode: "full-access",
+        });
+
+        expect(second.threadId).toBe(secondThreadId);
+        releaseFirst();
+        yield* Fiber.join(first);
+      }),
+      bridge.service,
+      {
+        ...makeOptions(runner),
+        makeToolProviders: async ({ threadId: requestedThreadId }) => {
+          if (requestedThreadId === threadId) {
+            markFirstEntered();
+            await release;
+          }
+          return [];
+        },
+      },
+    );
+  });
+
+  it.effect("aborts tool initialization when a pending session stops", () => {
+    const bridge = makeBridge();
+    const runner: AkeruModelRunner = { stream: async function* () {} };
+    let markStarted!: () => void;
+    const started = new Promise<void>((resolve) => {
+      markStarted = resolve;
+    });
+    let aborted = false;
+    return provide(
+      Effect.gen(function* () {
+        const controller = yield* AgentController;
+        yield* resolveCodex(controller);
+        const start = yield* controller
+          .startSession(threadId, {
+            threadId,
+            provider: ProviderDriverKind.make("codex"),
+            providerInstanceId: codexInstanceId,
+            runtimeMode: "full-access",
+          })
+          .pipe(Effect.forkChild({ startImmediately: true }));
+        yield* Effect.promise(() => started);
+
+        yield* controller.stopSession({ threadId });
+        yield* Effect.promise(() =>
+          vi.waitFor(() => {
+            expect(aborted).toBe(true);
+          }),
+        );
+        yield* Fiber.interrupt(start);
+      }),
+      bridge.service,
+      {
+        ...makeOptions(runner),
+        makeTools: async ({ signal }) =>
+          new Promise((_resolve, reject) => {
+            markStarted();
+            const stop = () => {
+              aborted = true;
+              reject(signal?.reason ?? new Error("stopped"));
+            };
+            if (signal?.aborted) stop();
+            else signal?.addEventListener("abort", stop, { once: true });
+          }),
+      },
+    );
+  });
+
+  it.effect("passes remote sandboxes to the Akeru tool host", () => {
+    const bridge = makeBridge();
+    const runner: AkeruModelRunner = { stream: async function* () {} };
+    const makeToolProviders = vi.fn(async () => []);
+    return provide(
+      Effect.gen(function* () {
+        const controller = yield* AgentController;
+        yield* resolveCodex(controller);
+        const session = yield* controller.startSession(threadId, {
+          threadId,
+          provider: ProviderDriverKind.make("codex"),
+          providerInstanceId: codexInstanceId,
+          botSandbox: "vercel",
+          runtimeMode: "full-access",
+        });
+        expect(session.provider).toBe(ProviderDriverKind.make("codex"));
+        expect(makeToolProviders).toHaveBeenCalledWith(
+          expect.objectContaining({ botSandbox: "vercel" }),
+        );
+      }),
+      bridge.service,
+      { ...makeOptions(runner), makeToolProviders },
     );
   });
 });

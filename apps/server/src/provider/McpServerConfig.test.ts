@@ -39,4 +39,20 @@ describe("provider MCP configuration", () => {
       local: { type: "stdio", command: "bunx", args: ["local-mcp"] },
     });
   });
+
+  it("attaches transient OAuth bearer headers to hosted MCP transports", () => {
+    const authorizationHeaders = { search: "Bearer context-access" };
+
+    expect(toAcpMcpServers(servers, authorizationHeaders)[0]).toEqual({
+      type: "http",
+      name: "Search",
+      url: "https://mcp.example.com",
+      headers: [{ name: "Authorization", value: "Bearer context-access" }],
+    });
+    expect(toClaudeMcpServers(servers, authorizationHeaders).search).toEqual({
+      type: "http",
+      url: "https://mcp.example.com",
+      headers: { Authorization: "Bearer context-access" },
+    });
+  });
 });

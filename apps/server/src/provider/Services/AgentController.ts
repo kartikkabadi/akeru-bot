@@ -84,13 +84,12 @@ export interface AgentControllerShape {
   ) => Effect.Effect<ProviderUploadFeedbackResult, AgentControllerError>;
 
   /**
-   * Codex events are normalized from Mastra controller sessions. Other provider
-   * adapters already produce the canonical event contract. Runtime ingestion
-   * consumes the merged stream once.
+   * Akeru sessions and legacy provider adapters emit one canonical runtime
+   * event contract. Runtime ingestion consumes the merged stream once.
    */
   readonly streamEvents: Stream.Stream<ProviderRuntimeEvent>;
 }
 
 export class AgentController extends Context.Service<AgentController, AgentControllerShape>()(
-  "t3/provider/Services/AgentController",
+  "akeru-bot/provider/Services/AgentController",
 ) {}

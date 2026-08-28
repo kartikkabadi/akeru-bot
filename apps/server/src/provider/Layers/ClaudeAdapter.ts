@@ -3753,7 +3753,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
 
     // Same reason as the approvals above: a request nobody can answer any more
     // must not stay open, or the thread can never be settled.
-    for (const pending of [...context.pendingUserInputs.values()]) {
+    for (const pending of context.pendingUserInputs.values()) {
       yield* pending.cancel;
     }
 
@@ -4298,8 +4298,9 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
           : {}),
       };
       const mcpSession = McpProviderSession.readMcpProviderSession(input.threadId);
+      const selectedMcpServers = input.mcpServers ?? [];
       const mcpServers = {
-        ...toClaudeMcpServers(input.mcpServers ?? []),
+        ...toClaudeMcpServers(selectedMcpServers, input.mcpServerAuthorizationHeaders),
         ...(mcpSession
           ? {
               "t3-code": {
@@ -4325,7 +4326,15 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         systemPrompt: {
           type: "preset",
           preset: "claude_code",
-          append: AKERU_AGENT_INSTRUCTIONS,
+          append: [
+            AKERU_AGENT_INSTRUCTIONS,
+            ...(selectedMcpServers.length > 0
+              ? [
+                  `Enabled MCP plugins for this chat: ${selectedMcpServers.map((server) => server.name).join(", ")}.`,
+                  "These plugins are connected and available. If asked about MCP or plugins, answer yes and name them.",
+                ]
+              : ["No MCP plugin tools are enabled for this chat."]),
+          ].join("\n"),
         },
         settingSources: [...CLAUDE_SETTING_SOURCES],
         // `ultracode` is a Claude Code setting, not an API effort level. It is
@@ -4714,7 +4723,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
 
     for (const result of results) {
       if (result._tag === "Failure") {
-        return yield* Effect.fail(result.failure);
+        return yield* result.failure;
       }
     }
   });
