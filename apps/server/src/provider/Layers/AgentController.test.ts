@@ -156,7 +156,7 @@ function makeMastraHarness() {
     }),
     sendMessage,
     abort: vi.fn(),
-    respondToToolApproval: vi.fn(),
+    respondToToolApproval: vi.fn(async () => undefined),
     respondToToolSuspension: vi.fn(async () => undefined),
   } as unknown as Session<Record<string, unknown>>;
   const createSession = vi.fn(async (_input: unknown) => session as never);
@@ -850,6 +850,16 @@ describe("AgentControllerLive", () => {
         environment: [{ name: "UPSTASH_BOX_API_KEY", value: "upstash-key", sensitive: true }],
       });
       expect(mastra.createSession.mock.calls[1]?.[0]).toMatchObject({ workspace: remote });
+      const events: ProviderRuntimeEvent[] = [];
+      const eventsFiber = yield* controller.streamEvents.pipe(
+        Stream.runForEach((event) =>
+          Effect.sync(() => {
+            events.push(event);
+          }),
+        ),
+        Effect.forkChild({ startImmediately: true }),
+      );
+      yield* Effect.yieldNow;
       yield* controller.sendTurn({ threadId: codexThreadId, input: "List files." });
       mastra.emit({
         type: "tool_approval_required",
@@ -857,11 +867,41 @@ describe("AgentControllerLive", () => {
         toolName: "execute_command",
         args: { command: "ls -la" },
       } as AgentControllerEvent);
+      yield* Effect.yieldNow;
       expect(mastra.session.respondToToolApproval).toHaveBeenCalledWith({
         toolCallId: "safe-cloud-command",
         decision: "approve",
       });
+
+      mastra.session.respondToToolApproval.mockRejectedValueOnce(
+        new Error("Injected automatic approval failure."),
+      );
+      mastra.emit({
+        type: "tool_approval_required",
+        toolCallId: "failed-cloud-auto-approval",
+        toolName: "execute_command",
+        args: { command: "pwd" },
+      } as AgentControllerEvent);
+      yield* Effect.promise(() => new Promise<void>((resolve) => setImmediate(resolve)));
+
+      assert.isTrue(
+        events.some(
+          (event) =>
+            event.type === "request.opened" &&
+            String(event.requestId) === "failed-cloud-auto-approval",
+        ),
+      );
+      yield* controller.respondToRequest({
+        threadId: codexThreadId,
+        requestId: ApprovalRequestId.make("failed-cloud-auto-approval"),
+        decision: "accept",
+      });
+      expect(mastra.session.respondToToolApproval).toHaveBeenCalledWith({
+        toolCallId: "failed-cloud-auto-approval",
+        decision: "approve",
+      });
       mastra.finishSend();
+      yield* Fiber.interrupt(eventsFiber);
       yield* controller.stopSession({ threadId: codexThreadId });
     }).pipe(Effect.provide(layer), Effect.orDie);
   });

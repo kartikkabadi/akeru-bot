@@ -433,36 +433,45 @@ const make = (options?: AgentControllerLiveOptions) =>
           });
           return;
         }
-        case "tool_approval_required":
+        case "tool_approval_required": {
           if (!turn) return;
           active.toolNames.set(event.toolCallId, event.toolName);
           const sensitiveAction = isSensitiveActionToolInvocation(event.toolName, event.args);
           if (sensitiveAction) active.sensitiveToolCalls.add(event.toolCallId);
-          if (!active.localComputer && event.toolName === "execute_command" && !sensitiveAction) {
-            active.session.respondToToolApproval({
-              toolCallId: event.toolCallId,
-              decision: "approve",
+          const requestApproval = () => {
+            if (active.activeTurn !== turn) return;
+            turn.waiting = true;
+            publishSessionState(threadId, active, "waiting");
+            publish({
+              ...baseEvent(threadId, active, turn.turnId),
+              requestId: RuntimeRequestId.make(event.toolCallId),
+              type: "request.opened",
+              payload: {
+                requestType: "dynamic_tool_call",
+                detail: `Allow ${event.toolName}?`,
+                args: event.args,
+                options: [
+                  { decision: "accept", label: "Allow" },
+                  { decision: "acceptForSession", label: "Allow for session" },
+                  { decision: "decline", label: "Decline" },
+                ],
+              },
             });
+          };
+          if (!active.localComputer && event.toolName === "execute_command" && !sensitiveAction) {
+            void Promise.resolve()
+              .then(() =>
+                active.session.respondToToolApproval({
+                  toolCallId: event.toolCallId,
+                  decision: "approve",
+                }),
+              )
+              .catch(requestApproval);
             return;
           }
-          turn.waiting = true;
-          publishSessionState(threadId, active, "waiting");
-          publish({
-            ...baseEvent(threadId, active, turn.turnId),
-            requestId: RuntimeRequestId.make(event.toolCallId),
-            type: "request.opened",
-            payload: {
-              requestType: "dynamic_tool_call",
-              detail: `Allow ${event.toolName}?`,
-              args: event.args,
-              options: [
-                { decision: "accept", label: "Allow" },
-                { decision: "acceptForSession", label: "Allow for session" },
-                { decision: "decline", label: "Decline" },
-              ],
-            },
-          });
+          requestApproval();
           return;
+        }
         case "tool_suspended":
           if (!turn) return;
           active.toolNames.set(event.toolCallId, event.toolName);
