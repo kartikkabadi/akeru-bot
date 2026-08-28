@@ -1051,22 +1051,22 @@ const make = Effect.gen(function* () {
             yield* writeSettingsAtomically(normalized);
             return normalized;
           }).pipe(
-            Effect.catch((error) =>
-              rollbackSettingsSecrets(secretSnapshots).pipe(
+            Effect.onExit((exit) => {
+              if (Exit.isSuccess(exit)) return Effect.void;
+              return rollbackSettingsSecrets(secretSnapshots).pipe(
                 Effect.mapError(
                   (rollbackError) =>
                     new ServerSettingsError({
                       settingsPath,
                       operation: "rollback-secret",
                       cause: new AggregateError(
-                        [error, rollbackError],
+                        [Cause.squash(exit.cause), rollbackError],
                         "Failed to restore server settings secrets after an update failure.",
                       ),
                     }),
                 ),
-                Effect.flatMap(() => Effect.fail(error)),
-              ),
-            ),
+              );
+            }),
           );
           yield* Cache.set(settingsCache, cacheKey, next);
           yield* emitChange(next);

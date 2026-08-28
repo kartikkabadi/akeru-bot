@@ -9,8 +9,10 @@ import {
 } from "@t3tools/contracts";
 import { createModelSelection } from "@t3tools/shared/model";
 import { assert, it } from "@effect/vitest";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Duration from "effect/Duration";
+import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -70,7 +72,7 @@ const makeMemorySecretStoreLayer = () => {
       }),
     remove: (name) => Effect.sync(() => values.delete(name)).pipe(Effect.asVoid),
   });
-  return { values, layer: Layer.succeed(ServerSecretStore.ServerSecretStore, service) };
+  return { values, service, layer: Layer.succeed(ServerSecretStore.ServerSecretStore, service) };
 };
 
 const makeWriteFailingServerSettingsLayer = (
@@ -1222,6 +1224,65 @@ it.layer(NodeServices.layer)("server settings", (it) => {
             "old-sandbox-secret",
           );
         }
+      }).pipe(Effect.provide(settingsLayer));
+    }),
+  );
+
+  it.effect("restores provider secrets when an update is interrupted", () =>
+    Effect.gen(function* () {
+      const secretStore = makeMemorySecretStoreLayer();
+      const secretPersisted = yield* Deferred.make<void>();
+      let blockNextSet = false;
+      const interruptingService = ServerSecretStore.ServerSecretStore.of({
+        ...secretStore.service,
+        set: (name, value) => {
+          const persist = secretStore.service.set(name, value);
+          if (!blockNextSet) return persist;
+          blockNextSet = false;
+          return persist.pipe(
+            Effect.andThen(Deferred.succeed(secretPersisted, undefined)),
+            Effect.andThen(Effect.never),
+          );
+        },
+      });
+      const settingsLayer = ServerSettingsModule.layer.pipe(
+        Layer.provide(Layer.succeed(ServerSecretStore.ServerSecretStore, interruptingService)),
+        Layer.provideMerge(Layer.fresh(SqlitePersistenceMemory)),
+        Layer.provideMerge(
+          Layer.fresh(
+            ServerConfig.layerTest(process.cwd(), {
+              prefix: "t3code-server-settings-interrupt-test-",
+            }),
+          ),
+        ),
+      );
+
+      yield* Effect.gen(function* () {
+        const serverSettings = yield* ServerSettingsModule.ServerSettingsService;
+        const instanceId = ProviderInstanceId.make("codex_personal");
+        const secretName = `provider-env-${Buffer.from(instanceId).toString("base64url")}-${Buffer.from("OPENROUTER_API_KEY").toString("base64url")}`;
+        const patch = (value: string) => ({
+          providerInstances: {
+            [instanceId]: {
+              driver: ProviderDriverKind.make("codex"),
+              environment: [{ name: "OPENROUTER_API_KEY", value, sensitive: true }],
+              config: {},
+            },
+          },
+        });
+
+        yield* serverSettings.updateSettings(patch("old-provider-secret"));
+        blockNextSet = true;
+        const update = yield* serverSettings
+          .updateSettings(patch("new-provider-secret"))
+          .pipe(Effect.forkScoped);
+
+        yield* Deferred.await(secretPersisted);
+        yield* Fiber.interrupt(update);
+        assert.equal(
+          new TextDecoder().decode(secretStore.values.get(secretName)),
+          "old-provider-secret",
+        );
       }).pipe(Effect.provide(settingsLayer));
     }),
   );
