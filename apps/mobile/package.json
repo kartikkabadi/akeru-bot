@@ -44,7 +44,6 @@
   },
   "dependencies": {
     "@callstack/liquid-glass": "^0.7.1",
-    "@clerk/expo": "catalog:",
     "@effect/atom-react": "catalog:",
     "@expo-google-fonts/dm-sans": "^0.4.2",
     "@expo/metro-runtime": "~56.0.15",
@@ -90,7 +89,6 @@
     "expo-image-picker": "~56.0.18",
     "expo-linking": "~56.0.14",
     "expo-network": "~56.0.5",
-    "expo-notifications": "~56.0.18",
     "expo-paste-input": "^0.1.15",
     "expo-quick-actions": "^6.0.2",
     "expo-secure-store": "~56.0.4",

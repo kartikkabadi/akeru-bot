@@ -96,6 +96,38 @@ describe("mobile model options", () => {
     expect(option?.selection.options).toEqual([{ id: "serviceTier", value: "default" }]);
   });
 
+  it("keeps Mastra providers available without a legacy CLI install", () => {
+    const config = {
+      providers: [
+        {
+          instanceId: "grok",
+          driver: "grok",
+          displayName: "Grok",
+          enabled: true,
+          installed: false,
+          auth: { status: "authenticated" },
+          models: [
+            {
+              slug: "grok-build",
+              name: "Grok Build",
+              isCustom: false,
+              capabilities: null,
+            },
+          ],
+        },
+      ],
+    } as unknown as ServerConfig;
+    const selection = {
+      instanceId: ProviderInstanceId.make("grok"),
+      model: "grok-build",
+    };
+
+    expect(resolveSelectableModelSelection(config, selection)).toBe(selection);
+    expect(buildModelOptions(config, null).map((option) => option.key)).toEqual([
+      "grok:grok-build",
+    ]);
+  });
+
   it("rejects stored selections whose provider is not usable", () => {
     const config = {
       providers: [

@@ -1,7 +1,8 @@
-import type {
-  ModelCapabilities,
-  ModelSelection,
-  ServerConfig as T3ServerConfig,
+import {
+  isAkeruRuntimeDriver,
+  type ModelCapabilities,
+  type ModelSelection,
+  type ServerConfig as T3ServerConfig,
 } from "@t3tools/contracts";
 import {
   buildProviderOptionSelectionsFromDescriptors,
@@ -76,9 +77,11 @@ export function resolveSelectableModelSelection(
   const provider = config.providers.find(
     (candidate) => candidate.instanceId === selection.instanceId,
   );
+  const runtimeAvailable =
+    provider && (provider.installed || isAkeruRuntimeDriver(provider.driver));
   return provider &&
     provider.enabled &&
-    provider.installed &&
+    runtimeAvailable &&
     provider.auth.status !== "unauthenticated"
     ? selection
     : null;
@@ -111,7 +114,8 @@ export function buildModelOptions(
   const options = new Map<string, ModelOption>();
 
   for (const provider of config?.providers ?? []) {
-    if (!provider.enabled || !provider.installed || provider.auth.status === "unauthenticated") {
+    const runtimeAvailable = provider.installed || isAkeruRuntimeDriver(provider.driver);
+    if (!provider.enabled || !runtimeAvailable || provider.auth.status === "unauthenticated") {
       continue;
     }
 
