@@ -6,10 +6,10 @@ import {
   GroupId,
   IsoDateTime,
   NonNegativeInt,
+  PositiveInt,
   ThreadId,
   TrimmedNonEmptyString,
 } from "./baseSchemas.ts";
-import { McpServerUrl } from "./mcpServer.ts";
 
 export const AKERU_COMMAND_MAX_CHARS = 32_000;
 export const AKERU_PATH_MAX_CHARS = 512;
@@ -61,12 +61,13 @@ export const AkeruToolInputSchemas = {
   SendToUser: Schema.Struct({
     message: TrimmedNonEmptyString.check(Schema.isMaxLength(AKERU_COMMAND_MAX_CHARS)),
   }),
-  InstallPlugin: Schema.Struct({
-    pluginId: TrimmedNonEmptyString,
-    name: TrimmedNonEmptyString,
-    url: McpServerUrl,
-    authentication: Schema.Literals(["none", "oauth", "optional-oauth"]),
+  SearchPlugins: Schema.Struct({
+    query: Schema.optional(TrimmedNonEmptyString),
+    limit: Schema.optional(PositiveInt.check(Schema.isLessThanOrEqualTo(50))),
   }),
+  GetPlugin: Schema.Struct({ pluginId: TrimmedNonEmptyString }),
+  InstallPlugin: Schema.Struct({ pluginId: TrimmedNonEmptyString }),
+  UninstallPlugin: Schema.Struct({ pluginId: TrimmedNonEmptyString }),
   AuthenticateMcpServer: McpServerIdInput,
   RestartMcpServers: Schema.Struct({
     serverIds: Schema.optional(Schema.Array(TrimmedNonEmptyString)),
@@ -207,8 +208,17 @@ export const AKERU_TOOL_CATALOG = [
   define("SendToUser", "bot-workspace", "Send a message into the current Akeru thread.", {
     approval: "send",
   }),
-  define("InstallPlugin", "bot-workspace", "Install or update a URL MCP plugin.", {
+  define("SearchPlugins", "bot-workspace", "Search the curated plugin directory."),
+  define(
+    "GetPlugin",
+    "bot-workspace",
+    "Inspect a plugin, its connection, permissions, health, and dependents.",
+  ),
+  define("InstallPlugin", "bot-workspace", "Install a curated plugin after inspecting it.", {
     approval: "production",
+  }),
+  define("UninstallPlugin", "bot-workspace", "Remove a curated plugin after inspecting it.", {
+    approval: "delete",
   }),
   define("AuthenticateMcpServer", "bot-workspace", "Authenticate an MCP server.", {
     approval: "secrets",
