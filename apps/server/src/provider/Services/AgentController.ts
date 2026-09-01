@@ -38,6 +38,10 @@ export interface AgentControllerEngineSelection extends AgentControllerAvailable
 }
 
 export interface AgentControllerShape {
+  readonly configurePluginRuntime?: (input: {
+    readonly readSnapshot: () => Promise<OrchestrationReadModel>;
+    readonly dispatch: (command: OrchestrationCommand) => Promise<unknown>;
+  }) => Effect.Effect<void>;
   readonly configureDelegation?: (input: {
     readonly readSnapshot: () => Promise<OrchestrationReadModel>;
     readonly dispatch: (command: OrchestrationCommand) => Promise<unknown>;

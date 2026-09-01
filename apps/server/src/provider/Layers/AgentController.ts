@@ -68,7 +68,11 @@ import {
   type AkeruDelegationChildOutcome,
   type AkeruDelegationRuntime,
 } from "../AkeruDelegationRuntime.ts";
-import { createAkeruCatalogToolHandlers } from "../AkeruCatalogToolHandlers.ts";
+import {
+  createAkeruCatalogToolHandlers,
+  createAkeruPluginRuntime,
+  type AkeruPluginRuntimeOptions,
+} from "../AkeruCatalogToolHandlers.ts";
 import {
   createAkeruToolRuntime,
   isMemoryToolId,
@@ -318,6 +322,7 @@ const make = (options?: AgentControllerLiveOptions) =>
     const sessions = new Map<string, ActiveSession>();
     let delegationRuntime: AkeruDelegationRuntime | undefined;
     let channelRuntime: AkeruChannelRuntime | undefined;
+    let pluginRuntime: ReturnType<typeof createAkeruPluginRuntime> | undefined;
     const childWaiters = new Map<
       string,
       { readonly resolve: (outcome: AkeruDelegationChildOutcome) => void }
@@ -939,7 +944,10 @@ const make = (options?: AgentControllerLiveOptions) =>
         workspace: resources.botWorkspace,
         ...(userComputerWorkspace ? { userComputerWorkspace } : {}),
         ...(registeredMemoryHandlers ? { memoryHandlers: registeredMemoryHandlers } : {}),
-        catalogHandlers: createAkeruCatalogToolHandlers(sessionResources.getMcpManager(key)),
+        catalogHandlers: createAkeruCatalogToolHandlers(
+          sessionResources.getMcpManager(key),
+          pluginRuntime,
+        ),
         ...(input.botId && delegationRuntime
           ? {
               sendToUser: async (request) => {
@@ -1357,6 +1365,10 @@ const make = (options?: AgentControllerLiveOptions) =>
     );
 
     return AgentController.of({
+      configurePluginRuntime: (input: AkeruPluginRuntimeOptions) =>
+        Effect.sync(() => {
+          pluginRuntime = createAkeruPluginRuntime(input);
+        }),
       configureDelegation: (input) =>
         Effect.sync(() => {
           channelRuntime = createAkeruChannelRuntime(input);
