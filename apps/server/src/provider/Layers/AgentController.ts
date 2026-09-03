@@ -103,6 +103,7 @@ import {
   createAkeruPluginRuntime,
   type AkeruPluginRuntimeOptions,
 } from "../AkeruCatalogToolHandlers.ts";
+import { getMcpRuntimeHeaders, sameMcpServerConfigurations } from "../McpServerConfig.ts";
 import {
   createAkeruToolRuntime,
   isMemoryToolId,
@@ -198,6 +199,7 @@ interface ActiveSession {
   readonly cwd: string | undefined;
   readonly createdAt: string;
   readonly mcpServerIds: readonly McpServer["id"][];
+  readonly mcpServers: readonly McpServer[];
   runtimeMode: RuntimeMode;
   model: string;
   status: ProviderSession["status"];
@@ -335,6 +337,9 @@ export function toMcpServerConfigs(
       server.transport === "url"
         ? {
             url: server.url,
+            ...(Object.keys(getMcpRuntimeHeaders(server)).length > 0
+              ? { headers: getMcpRuntimeHeaders(server) }
+              : {}),
             ...(browser?.availableToHostedPlugins &&
             BROWSER_AWARE_MCP_SERVER_IDS.has(String(server.id))
               ? {
@@ -1723,13 +1728,10 @@ const make = (options?: AgentControllerLiveOptions) =>
         existing?.workspaceResourceKey === workspaceResourceKey &&
         existing.cwd === input.cwd &&
         existing.toolSession.workspaceType === workspaceType &&
-        existing.mcpServerIds.length === mcpServers.length &&
-        existing.mcpServerIds.every((id) => mcpServers.some((server) => server.id === id)) &&
+        sameMcpServerConfigurations(existing.mcpServers, mcpServers) &&
         resolved &&
         existing.provider === resolved.provider &&
-        existing.providerInstanceId === resolved.providerInstanceId &&
-        existing.mcpServerIds.length === (input.mcpServers?.length ?? 0) &&
-        existing.mcpServerIds.every((id) => input.mcpServers?.some((server) => server.id === id))
+        existing.providerInstanceId === resolved.providerInstanceId
       ) {
         existing.runtimeMode = access.runtimeMode;
         yield* runMastra("state.set", () =>
@@ -2038,6 +2040,7 @@ const make = (options?: AgentControllerLiveOptions) =>
           cwd: input.cwd,
           createdAt: nowIso(),
           mcpServerIds: mcpServers.map((server) => server.id),
+          mcpServers,
           runtimeMode: access.runtimeMode,
           model: resolved.modelSelection.model,
           status: "ready" as const,
