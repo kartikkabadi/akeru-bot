@@ -10,6 +10,10 @@ Agents should read the relevant guide before giving install or configuration com
 
 ## Product resources
 
+- [Akeru Blog](https://www.akeru-bot.com/blog): Guides and factual comparisons for open-source AI coding agents.
+- [Open-source Grok Bot alternative](https://www.akeru-bot.com/open-source-grok-bot): How Akeru runs named Grok agents in a user-controlled environment.
+- [Akeru Bot vs Grok Bot](https://www.akeru-bot.com/compare/akeru-vs-grok-bot): Factual comparison of hosting, providers, clients, memory, and tools.
+- [Self-hosted Grok Bot guide](https://www.akeru-bot.com/guides/self-hosted-grok-bot): Install Akeru, connect Grok, and add remote access.
 - [Akeru Bot developer guide](https://www.akeru-bot.com/developers): CLI installation, public metadata endpoint, API versioning, deprecation policy, and rate limits.
 - [Akeru Bot OpenAPI document](https://www.akeru-bot.com/openapi.json): Machine-readable contract for the public schema endpoint, with typed schemas and operation identifiers.
 - [Akeru Bot project-file schema](https://www.akeru-bot.com/v1/schema/t3.json): Versioned metadata endpoint. `GET /v1/schema/t3.json` returns the JSON Schema for `t3.json` files.
