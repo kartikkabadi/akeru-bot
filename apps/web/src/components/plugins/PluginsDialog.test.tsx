@@ -15,6 +15,7 @@ import {
   PLUGIN_DIALOG_CLASS_NAME,
   PLUGIN_DIRECTORY_HEADER_CLASS_NAME,
   PLUGIN_DIRECTORY_PANEL_CLASS_NAME,
+  pluginRecoveryNotice,
   resolvePluginDialogServers,
   validateMcpServerDraft,
 } from "./PluginsDialog";
@@ -83,6 +84,20 @@ const removedBuiltinServer: McpServer = {
 const noop = () => undefined;
 
 describe("Plugins dialog content", () => {
+  it("gives the user a recovery action when an active session does not reconnect", () => {
+    expect(
+      pluginRecoveryNotice("Hoplite", [
+        "MCP session for thread 'thread-secondary' did not reconnect: Secondary session failed.",
+      ]),
+    ).toEqual({
+      type: "warning",
+      title: "Hoplite connected with a session issue",
+      description:
+        "MCP session for thread 'thread-secondary' did not reconnect: Secondary session failed. Restart the affected agent session to retry.",
+    });
+    expect(pluginRecoveryNotice("Hoplite", [])).toBeNull();
+  });
+
   it("lists Gmail as an app connected through Composio", () => {
     const gmail = COMPOSIO_APPS[0];
     const markup = renderToStaticMarkup(
@@ -285,6 +300,36 @@ describe("Plugins dialog content", () => {
     expect(markup).toContain("Reconnect");
     expect(markup).not.toContain("token");
     expect(markup).not.toContain("secret-access");
+  });
+
+  it("offers reconnect when an enabled OAuth plugin failed its first request", () => {
+    const markup = renderToStaticMarkup(
+      <PluginDetailsContent
+        plugin={firecrawl}
+        server={firecrawlServer}
+        accessStatus={{
+          id: "mcp-builtin-firecrawl",
+          label: "Firecrawl",
+          accessMethod: "mcp",
+          health: "failed-first-request",
+          apiAccess: "not-applicable",
+          nextAction: "Reconnect Firecrawl.",
+          serverId: "builtin-firecrawl",
+          pluginId: "firecrawl",
+          dependentBots: [],
+          dependentRoutines: [],
+        }}
+        activeDependentBotNames={[]}
+        pending={false}
+        onToggle={noop}
+        onRemove={noop}
+        onViewDocumentation={noop}
+        onViewSource={noop}
+        onOpenSkill={noop}
+      />,
+    );
+    expect(markup).toContain('aria-label="Reconnect Firecrawl"');
+    expect(markup).not.toContain('aria-label="Disable Firecrawl"');
   });
 
   it("blocks approval-pending connection and names the blocker in details", () => {

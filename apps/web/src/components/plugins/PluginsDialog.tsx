@@ -50,6 +50,7 @@ import {
   RemovedBuiltinServers,
 } from "./PluginsCatalog";
 import { PluginDetails } from "./PluginDetails";
+import { runPluginEnablePlan } from "./pluginConnection";
 import {
   findPluginServer,
   isBuiltinMcpServer,
@@ -90,6 +91,15 @@ export function resolvePluginDialogServers(
 export const PLUGIN_DIALOG_CLASS_NAME = "h-[min(48rem,90dvh)] max-w-5xl flex-col overflow-hidden";
 export const PLUGIN_DIRECTORY_HEADER_CLASS_NAME = "shrink-0 gap-3 px-6 pt-5 pb-4";
 export const PLUGIN_DIRECTORY_PANEL_CLASS_NAME = "space-y-8 px-5 pt-5! pb-5 sm:px-6";
+
+export function pluginRecoveryNotice(pluginTitle: string, recoveryFailures: readonly string[]) {
+  if (recoveryFailures.length === 0) return null;
+  return {
+    type: "warning" as const,
+    title: `${pluginTitle} connected with a session issue`,
+    description: `${recoveryFailures.join(" ")} Restart the affected agent session to retry.`,
+  };
+}
 
 export interface McpServerDraft {
   readonly name: string;
@@ -167,6 +177,9 @@ function PluginsDialogForEnvironment({ environmentId }: { readonly environmentId
   const deleteServer = useAtomCommand(mcpServerEnvironment.delete, { reportFailure: false });
   const enableServer = useAtomCommand(mcpServerEnvironment.enable, { reportFailure: false });
   const disableServer = useAtomCommand(mcpServerEnvironment.disable, { reportFailure: false });
+  const authenticateServer = useAtomCommand(serverEnvironment.authenticateMcpServer, {
+    reportFailure: false,
+  });
   const [query, setQuery] = useState("");
   const deferredQuery = useDeferredValue(query.trim());
   const [filter, setFilter] = useState<PluginFilter>("All");
@@ -327,39 +340,87 @@ function PluginsDialogForEnvironment({ environmentId }: { readonly environmentId
       composioStatus.refresh();
       return;
     }
-    let plan;
-    if (enabled) {
-      if (!isInstallablePlugin(plugin)) return;
-      plan = planPluginToggle(plugin, servers, true);
-    } else {
-      plan = { action: "disable" as const, mcpServerId: pluginMcpServerId(plugin) };
+    if (!enabled) {
+      const mcpServerId = pluginMcpServerId(plugin);
+      setPendingServerId(mcpServerId);
+      const result = await disableServer({ environmentId, input: { mcpServerId } });
+      setPendingServerId(null);
+      reportFailure(`Could not disable ${plugin.title}`, result);
+      return;
     }
+    if (!isInstallablePlugin(plugin)) return;
+
+    const plan = planPluginToggle(plugin, servers, true);
+    if (plan.action === "disable") return;
     setPendingServerId(plan.mcpServerId);
-    if (plan.action === "refresh-and-enable") {
-      const updateResult = await updateServer({
-        environmentId,
-        input: { mcpServerId: plan.mcpServerId, ...plan.configuration },
+    const commandSucceeded = (title: string, result: Awaited<ReturnType<typeof createServer>>) => {
+      if (result._tag === "Success") return true;
+      reportFailure(title, result);
+      return false;
+    };
+    const shouldAuthenticate =
+      plugin.authentication === "oauth" || plugin.authentication === "optional-oauth";
+
+    try {
+      await runPluginEnablePlan(plan, {
+        create: async (mcpServerId, configuration) =>
+          commandSucceeded(
+            `Could not enable ${plugin.title}`,
+            await createServer({
+              environmentId,
+              input: { mcpServerId, ...configuration },
+            }),
+          ),
+        update: async (mcpServerId, configuration) =>
+          commandSucceeded(
+            `Could not update ${plugin.title}`,
+            await updateServer({
+              environmentId,
+              input: { mcpServerId, ...configuration },
+            }),
+          ),
+        enable: async (mcpServerId) =>
+          commandSucceeded(
+            `Could not enable ${plugin.title}`,
+            await enableServer({ environmentId, input: { mcpServerId } }),
+          ),
+        ...(shouldAuthenticate
+          ? {
+              authenticate: async (mcpServerId, onAuthorizationUrl) => {
+                const result = await authenticateServer({
+                  environmentId,
+                  mcpServerId,
+                  onAuthorizationUrl,
+                });
+                if (result._tag === "Success") {
+                  const notice = pluginRecoveryNotice(plugin.title, result.value.recoveryFailures);
+                  if (notice) toastManager.add(notice);
+                  return true;
+                }
+                if (!isAtomCommandInterrupted(result)) {
+                  const error = squashAtomCommandFailure(result);
+                  toastManager.add({
+                    type: "error",
+                    title: `Could not connect ${plugin.title}`,
+                    description: error instanceof Error ? error.message : "Authentication failed.",
+                  });
+                }
+                return false;
+              },
+            }
+          : {}),
+        openAuthorizationUrl: async (url) => {
+          const authorizationUrl = new URL(url);
+          if (authorizationUrl.protocol !== "https:") {
+            throw new Error("The authorization URL must use HTTPS.");
+          }
+          await ensureLocalApi().shell.openExternal(authorizationUrl.toString());
+        },
       });
-      if (reportFailure(`Could not update ${plugin.title}`, updateResult)) {
-        setPendingServerId(null);
-        return;
-      }
+    } finally {
+      setPendingServerId(null);
+      subscriptionAuth.refresh();
     }
-    const result =
-      plan.action === "create"
-        ? await createServer({
-            environmentId,
-            input: { mcpServerId: plan.mcpServerId, ...plan.configuration },
-          })
-        : await (plan.action === "refresh-and-enable" ? enableServer : disableServer)({
-            environmentId,
-            input: { mcpServerId: plan.mcpServerId },
-          });
-    setPendingServerId(null);
-    reportFailure(
-      enabled ? `Could not enable ${plugin.title}` : `Could not disable ${plugin.title}`,
-      result,
-    );
   };
 
   const connectComposioToolkit = async (toolkit: ComposioToolkit) => {
@@ -559,6 +620,7 @@ function PluginsDialogForEnvironment({ environmentId }: { readonly environmentId
             <PluginsCatalog
               sections={sections}
               servers={displayServers}
+              accessStatuses={subscriptionAuth.data?.access ?? []}
               pendingServerId={pendingServerId}
               onToggle={(plugin, enabled) => void togglePlugin(plugin, enabled)}
               onOpen={openPlugin}
