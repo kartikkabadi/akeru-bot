@@ -9,8 +9,6 @@ core:packages:
     updated: false
   - id: npm:@t3tools/scripts
     updated: false
-  - id: npm:akeru-feedback
-    updated: false
   - changelogIds:
       - stable-release.md
     id: npm:@t3tools/desktop
@@ -25,6 +23,8 @@ core:packages:
       - stable-release.md
     id: npm:@t3tools/web
     updated: true
+  - id: npm:akeru-feedback
+    updated: false
   - id: npm:@t3tools/client-runtime
     updated: false
   - changelogIds:
@@ -45,11 +45,11 @@ npm:packages:
   - id: npm:@t3tools/monorepo
   - id: npm:@t3tools/oxlint-plugin-t3code
   - id: npm:@t3tools/scripts
-  - id: npm:akeru-feedback
   - id: npm:@t3tools/desktop
   - id: npm:@t3tools/marketing
   - id: npm:akeru-bot
   - id: npm:@t3tools/web
+  - id: npm:akeru-feedback
   - id: npm:@t3tools/client-runtime
   - id: npm:@t3tools/contracts
   - id: npm:effect-acp
