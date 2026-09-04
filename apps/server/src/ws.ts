@@ -79,6 +79,8 @@ import {
 } from "@t3tools/contracts";
 import { resolveServerBackgroundActivitySettings } from "@t3tools/shared/backgroundActivitySettings";
 import { SubscriptionAuthService } from "./subscription-auth/service.ts";
+import { makeApiKeySessionReset } from "./subscription-auth/sessionReset.ts";
+import { deriveProviderInstanceConfigMap } from "./provider/Layers/ProviderInstanceRegistryHydration.ts";
 import {
   buildProviderAccessCapabilities,
   subscriptionDependentBots,
@@ -540,6 +542,14 @@ const makeWsRpcLayer = (
       const botInbox = BotInboxService.forSecretsDir(config.secretsDir);
       const lifecycleEvents = yield* ServerLifecycleEvents.ServerLifecycleEvents;
       const serverSettings = yield* ServerSettings.ServerSettingsService;
+      const resetChangedApiKeySessions = makeApiKeySessionReset(
+        subscriptionAuth,
+        agentController,
+        serverSettings.getSettings.pipe(
+          Effect.map(deriveProviderInstanceConfigMap),
+          Effect.orElseSucceed(() => ({})),
+        ),
+      );
       const startup = yield* ServerRuntimeStartup.ServerRuntimeStartup;
       const workspaceEntries = yield* WorkspaceEntries.WorkspaceEntries;
       const workspaceFileSystem = yield* WorkspaceFileSystem.WorkspaceFileSystem;
@@ -2478,11 +2488,11 @@ const makeWsRpcLayer = (
             }),
             { "rpc.aggregate": "bot" },
           ),
-        [WS_METHODS.subscriptionAuthStart]: ({ provider }) =>
+        [WS_METHODS.subscriptionAuthStart]: ({ provider, ...options }) =>
           observeRpcEffect(
             WS_METHODS.subscriptionAuthStart,
             Effect.tryPromise({
-              try: () => subscriptionAuth.startLogin(provider),
+              try: () => subscriptionAuth.startLogin(provider, options),
               catch: (cause) =>
                 new SubscriptionAuthError({
                   reason: cause instanceof Error ? cause.message : String(cause),
@@ -2499,7 +2509,7 @@ const makeWsRpcLayer = (
                 new SubscriptionAuthError({
                   reason: cause instanceof Error ? cause.message : String(cause),
                 }),
-            }),
+            }).pipe(resetChangedApiKeySessions),
             { "rpc.aggregate": "server" },
           ),
         [WS_METHODS.subscriptionAuthComplete]: ({ loginId, code }) =>
@@ -2511,7 +2521,7 @@ const makeWsRpcLayer = (
                 new SubscriptionAuthError({
                   reason: cause instanceof Error ? cause.message : String(cause),
                 }),
-            }),
+            }).pipe(resetChangedApiKeySessions),
             { "rpc.aggregate": "server" },
           ),
         [WS_METHODS.subscriptionAuthCancel]: ({ loginId }) =>
@@ -2528,7 +2538,7 @@ const makeWsRpcLayer = (
             WS_METHODS.subscriptionAuthLogout,
             Effect.sync(() => {
               subscriptionAuth.logout(provider);
-            }).pipe(Effect.andThen(getAccessHealthSnapshot())),
+            }).pipe(resetChangedApiKeySessions, Effect.andThen(getAccessHealthSnapshot())),
             { "rpc.aggregate": "server" },
           ),
         [WS_METHODS.subscriptionAuthHealthTest]: ({ provider }) =>
