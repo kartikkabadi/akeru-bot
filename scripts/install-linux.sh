@@ -75,7 +75,7 @@ if [ -e "$dest" ] && [ ! -f "$dest" ]; then
   exit 1
 fi
 staged="$dest.new.$$"
-trap 'rm -f "$staged"' EXIT
+trap 'rm -rf "$tmp"; rm -f "$staged"' EXIT
 if ! cp -p "$tmp/$appimage" "$staged"; then
   rm -f "$staged"
   exit 1

@@ -106,7 +106,7 @@ describe("install-linux.sh", () => {
     NodeAssert.match(script, /if \[ -e "\$dest" \] && \[ ! -f "\$dest" \]; then/);
     NodeAssert.match(script, /refusing to overwrite non-regular file/);
     NodeAssert.match(script, /staged="\$dest\.new\.\$\$"/);
-    NodeAssert.match(script, /trap 'rm -f "\$staged"' EXIT/);
+    NodeAssert.match(script, /trap 'rm -rf "\$tmp"; rm -f "\$staged"' EXIT/);
     NodeAssert.match(script, /cp -p "\$tmp\/\$appimage" "\$staged"/);
     NodeAssert.match(script, /chmod \+x "\$staged"/);
     NodeAssert.match(script, /mv -f "\$staged" "\$dest"/);
