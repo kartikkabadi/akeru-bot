@@ -29,12 +29,16 @@ describe("installPromptPlatformForDownload", () => {
 
   it("sends macOS users to the release-pinned one-line installer", () => {
     expect(MAC_CURL_INSTALL_COMMAND).toBe(
-      't=$(curl -fsSL https://api.github.com/repos/opencoredev/akeru-bot/releases/latest | sed -n \'s/.*"tag_name":[[:space:]]*"\\(v[0-9][^"]*\\)".*/\\1/p\' | head -1); [ -n "$t" ] && curl -fsSL -o /tmp/akeru-install.sh "https://raw.githubusercontent.com/opencoredev/akeru-bot/$t/scripts/install-macos.sh" && bash /tmp/akeru-install.sh --tag "$t"; rm -f /tmp/akeru-install.sh',
+      't=$(curl -fsSL https://api.github.com/repos/opencoredev/akeru-bot/releases/latest | sed -n \'s/.*"tag_name":[[:space:]]*"\\(v[0-9][^"]*\\)".*/\\1/p\' | head -1); if [ -z "$t" ]; then echo "Could not resolve the latest Akeru Bot release." >&2; (exit 1); else f=$(mktemp /tmp/akeru-install.XXXXXX) && curl -fsSL -o "$f" "https://raw.githubusercontent.com/opencoredev/akeru-bot/$t/scripts/install-macos.sh" && bash "$f" --tag "$t"; rc=$?; rm -f "${f:-/tmp/akeru-install-none}"; (exit $rc); fi',
     );
     expect(MAC_CURL_INSTALL_COMMAND).toContain("releases/latest");
     expect(MAC_CURL_INSTALL_COMMAND).toContain("/$t/scripts/install-macos.sh");
     expect(MAC_CURL_INSTALL_COMMAND).toContain('--tag "$t"');
-    expect(MAC_CURL_INSTALL_COMMAND).toContain("rm -f /tmp/akeru-install.sh");
+    expect(MAC_CURL_INSTALL_COMMAND).toContain("f=$(mktemp /tmp/akeru-install.XXXXXX)");
+    expect(MAC_CURL_INSTALL_COMMAND).toContain(
+      'rc=$?; rm -f "${f:-/tmp/akeru-install-none}"; (exit $rc)',
+    );
+    expect(MAC_CURL_INSTALL_COMMAND).not.toContain("curl -fsSL -o /tmp/akeru-install.sh");
     expect(MAC_CURL_INSTALL_COMMAND).not.toContain("/releases/latest/download");
     expect(MAC_CURL_INSTALL_COMMAND).not.toContain("| bash");
     expect(MAC_DOWNLOAD_DIALOG_TITLE).toMatch(/one command/);
@@ -45,12 +49,16 @@ describe("installPromptPlatformForDownload", () => {
 
   it("sends Windows users to the release-pinned one-line installer", () => {
     expect(WIN_POWERSHELL_INSTALL_COMMAND).toBe(
-      '$t = (Invoke-RestMethod https://api.github.com/repos/opencoredev/akeru-bot/releases/latest).tag_name; if ($t) { Invoke-WebRequest "https://raw.githubusercontent.com/opencoredev/akeru-bot/$t/scripts/install-windows.ps1" -OutFile "$env:TEMP\\akeru-install.ps1"; & "$env:TEMP\\akeru-install.ps1" -Tag $t; Remove-Item "$env:TEMP\\akeru-install.ps1" }',
+      "$t = (Invoke-RestMethod https://api.github.com/repos/opencoredev/akeru-bot/releases/latest -ErrorAction Stop).tag_name; if ($t -match '^v\\d+\\.\\d+\\.\\d+$') { $f = [IO.Path]::ChangeExtension((New-TemporaryFile).FullName, '.ps1'); Invoke-WebRequest \"https://raw.githubusercontent.com/opencoredev/akeru-bot/$t/scripts/install-windows.ps1\" -OutFile $f -ErrorAction Stop; try { & $f -Tag $t } finally { Remove-Item $f } } else { throw \"Could not resolve the latest Akeru Bot release.\" }",
     );
     expect(WIN_POWERSHELL_INSTALL_COMMAND).toContain("releases/latest");
     expect(WIN_POWERSHELL_INSTALL_COMMAND).toContain("/$t/scripts/install-windows.ps1");
     expect(WIN_POWERSHELL_INSTALL_COMMAND).toContain("-Tag $t");
-    expect(WIN_POWERSHELL_INSTALL_COMMAND).toContain('Remove-Item "$env:TEMP\\akeru-install.ps1"');
+    expect(WIN_POWERSHELL_INSTALL_COMMAND).toContain("New-TemporaryFile");
+    expect(WIN_POWERSHELL_INSTALL_COMMAND).toContain(
+      "try { & $f -Tag $t } finally { Remove-Item $f }",
+    );
+    expect(WIN_POWERSHELL_INSTALL_COMMAND).not.toContain("$env:TEMP\\akeru-install.ps1");
     expect(WIN_POWERSHELL_INSTALL_COMMAND).not.toContain("/releases/latest/download");
     expect(WIN_POWERSHELL_INSTALL_COMMAND).not.toContain("| bash");
     expect(WIN_POWERSHELL_INSTALL_COMMAND).not.toContain("/main/scripts/");
@@ -62,12 +70,16 @@ describe("installPromptPlatformForDownload", () => {
 
   it("sends Linux users to the release-pinned one-line installer", () => {
     expect(LINUX_CURL_INSTALL_COMMAND).toBe(
-      't=$(curl -fsSL https://api.github.com/repos/opencoredev/akeru-bot/releases/latest | sed -n \'s/.*"tag_name":[[:space:]]*"\\(v[0-9][^"]*\\)".*/\\1/p\' | head -1); [ -n "$t" ] && curl -fsSL -o /tmp/akeru-install-linux.sh "https://raw.githubusercontent.com/opencoredev/akeru-bot/$t/scripts/install-linux.sh" && bash /tmp/akeru-install-linux.sh --tag "$t"; rm -f /tmp/akeru-install-linux.sh',
+      't=$(curl -fsSL https://api.github.com/repos/opencoredev/akeru-bot/releases/latest | sed -n \'s/.*"tag_name":[[:space:]]*"\\(v[0-9][^"]*\\)".*/\\1/p\' | head -1); if [ -z "$t" ]; then echo "Could not resolve the latest Akeru Bot release." >&2; (exit 1); else f=$(mktemp /tmp/akeru-install.XXXXXX) && curl -fsSL -o "$f" "https://raw.githubusercontent.com/opencoredev/akeru-bot/$t/scripts/install-linux.sh" && bash "$f" --tag "$t"; rc=$?; rm -f "${f:-/tmp/akeru-install-none}"; (exit $rc); fi',
     );
     expect(LINUX_CURL_INSTALL_COMMAND).toContain("releases/latest");
     expect(LINUX_CURL_INSTALL_COMMAND).toContain("/$t/scripts/install-linux.sh");
     expect(LINUX_CURL_INSTALL_COMMAND).toContain('--tag "$t"');
-    expect(LINUX_CURL_INSTALL_COMMAND).toContain("rm -f /tmp/akeru-install-linux.sh");
+    expect(LINUX_CURL_INSTALL_COMMAND).toContain("f=$(mktemp /tmp/akeru-install.XXXXXX)");
+    expect(LINUX_CURL_INSTALL_COMMAND).toContain(
+      'rc=$?; rm -f "${f:-/tmp/akeru-install-none}"; (exit $rc)',
+    );
+    expect(LINUX_CURL_INSTALL_COMMAND).not.toContain("curl -fsSL -o /tmp/akeru-install-linux.sh");
     expect(LINUX_CURL_INSTALL_COMMAND).not.toContain("/releases/latest/download");
     expect(LINUX_CURL_INSTALL_COMMAND).not.toContain("| bash");
     expect(LINUX_CURL_INSTALL_COMMAND).not.toContain("/main/scripts/");

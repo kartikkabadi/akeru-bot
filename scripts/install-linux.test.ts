@@ -100,16 +100,17 @@ describe("install-linux.sh", () => {
     NodeAssert.doesNotMatch(script, /shasum/);
   });
 
-  it("installs to ~/.local/bin with backup and rollback", () => {
+  it("installs atomically to ~/.local/bin with no partial binary", () => {
     NodeAssert.match(script, /dest="\$HOME\/\.local\/bin\/akeru-bot"/);
     NodeAssert.match(script, /mkdir -p "\$HOME\/\.local\/bin"/);
     NodeAssert.match(script, /if \[ -e "\$dest" \] && \[ ! -f "\$dest" \]; then/);
     NodeAssert.match(script, /refusing to overwrite non-regular file/);
-    NodeAssert.match(script, /backup="\$dest\.backup"/);
-    NodeAssert.match(script, /cp -p "\$dest" "\$backup"/);
-    NodeAssert.match(script, /cp -p "\$tmp\/\$appimage" "\$dest"/);
-    NodeAssert.match(script, /cp -p "\$backup" "\$dest"/);
-    NodeAssert.match(script, /chmod \+x "\$dest"/);
+    NodeAssert.match(script, /staged="\$dest\.new"/);
+    NodeAssert.match(script, /cp -p "\$tmp\/\$appimage" "\$staged"/);
+    NodeAssert.match(script, /chmod \+x "\$staged"/);
+    NodeAssert.match(script, /mv -f "\$staged" "\$dest"/);
+    NodeAssert.doesNotMatch(script, /cp -p "\$tmp\/\$appimage" "\$dest"/);
+    NodeAssert.doesNotMatch(script, /\.backup/);
   });
 
   it("prints the exact success sentence last", () => {
@@ -120,14 +121,17 @@ describe("install-linux.sh", () => {
     NodeAssert.ok(script.trimEnd().endsWith('echo "Installed Akeru Bot $tag."'));
   });
 
-  it("documents a temp-file one-liner and never pipes a download to a shell", () => {
-    NodeAssert.match(script, /\[ -n "\$t" \]/);
+  it("documents a private-temp-file one-liner that preserves failures", () => {
+    NodeAssert.match(script, /if \[ -z "\$t" \]; then/);
     NodeAssert.match(
       script,
       /raw\.githubusercontent\.com\/opencoredev\/akeru-bot\/\$t\/scripts\/install-linux\.sh/,
     );
     NodeAssert.match(script, /--tag "\$t"/);
-    NodeAssert.match(script, /rm -f \/tmp\/akeru-install-linux\.sh/);
+    NodeAssert.match(script, /f=\$\(mktemp \/tmp\/akeru-install\.XXXXXX\)/);
+    NodeAssert.match(script, /Could not resolve the latest Akeru Bot release/);
+    NodeAssert.match(script, /rc=\$\?; rm -f "\$\{f:-\/tmp\/akeru-install-none\}"; \(exit \$rc\)/);
+    NodeAssert.doesNotMatch(script, /curl -fsSL -o \/tmp\/akeru-install-linux\.sh/);
     NodeAssert.doesNotMatch(script, /\|\s*(bash|sh)([\s;]|$)/);
   });
 

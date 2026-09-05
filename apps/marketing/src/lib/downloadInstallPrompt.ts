@@ -1,5 +1,5 @@
 export const MAC_CURL_INSTALL_COMMAND =
-  't=$(curl -fsSL https://api.github.com/repos/opencoredev/akeru-bot/releases/latest | sed -n \'s/.*"tag_name":[[:space:]]*"\\(v[0-9][^"]*\\)".*/\\1/p\' | head -1); [ -n "$t" ] && curl -fsSL -o /tmp/akeru-install.sh "https://raw.githubusercontent.com/opencoredev/akeru-bot/$t/scripts/install-macos.sh" && bash /tmp/akeru-install.sh --tag "$t"; rm -f /tmp/akeru-install.sh';
+  't=$(curl -fsSL https://api.github.com/repos/opencoredev/akeru-bot/releases/latest | sed -n \'s/.*"tag_name":[[:space:]]*"\\(v[0-9][^"]*\\)".*/\\1/p\' | head -1); if [ -z "$t" ]; then echo "Could not resolve the latest Akeru Bot release." >&2; (exit 1); else f=$(mktemp /tmp/akeru-install.XXXXXX) && curl -fsSL -o "$f" "https://raw.githubusercontent.com/opencoredev/akeru-bot/$t/scripts/install-macos.sh" && bash "$f" --tag "$t"; rc=$?; rm -f "${f:-/tmp/akeru-install-none}"; (exit $rc); fi';
 
 export const MAC_DOWNLOAD_DIALOG_TITLE = "Install with one command, not the browser";
 
@@ -7,7 +7,7 @@ export const MAC_DOWNLOAD_DIALOG_BODY =
   "Safari and Chrome quarantine unsigned Mac apps, so Gatekeeper says Akeru Bot is damaged. Paste this one-liner in Terminal. It resolves the latest stable release, downloads that release's installer, checks the DMG against SHA256SUMS, then installs.";
 
 export const WIN_POWERSHELL_INSTALL_COMMAND =
-  '$t = (Invoke-RestMethod https://api.github.com/repos/opencoredev/akeru-bot/releases/latest).tag_name; if ($t) { Invoke-WebRequest "https://raw.githubusercontent.com/opencoredev/akeru-bot/$t/scripts/install-windows.ps1" -OutFile "$env:TEMP\\akeru-install.ps1"; & "$env:TEMP\\akeru-install.ps1" -Tag $t; Remove-Item "$env:TEMP\\akeru-install.ps1" }';
+  "$t = (Invoke-RestMethod https://api.github.com/repos/opencoredev/akeru-bot/releases/latest -ErrorAction Stop).tag_name; if ($t -match '^v\\d+\\.\\d+\\.\\d+$') { $f = [IO.Path]::ChangeExtension((New-TemporaryFile).FullName, '.ps1'); Invoke-WebRequest \"https://raw.githubusercontent.com/opencoredev/akeru-bot/$t/scripts/install-windows.ps1\" -OutFile $f -ErrorAction Stop; try { & $f -Tag $t } finally { Remove-Item $f } } else { throw \"Could not resolve the latest Akeru Bot release.\" }";
 
 export const WIN_DOWNLOAD_DIALOG_TITLE = "Install with one command in PowerShell";
 
@@ -15,7 +15,7 @@ export const WIN_DOWNLOAD_DIALOG_BODY =
   "Paste this one-liner in PowerShell. It resolves the latest stable release, downloads that release's installer, checks the exe against SHA256SUMS, then runs it.";
 
 export const LINUX_CURL_INSTALL_COMMAND =
-  't=$(curl -fsSL https://api.github.com/repos/opencoredev/akeru-bot/releases/latest | sed -n \'s/.*"tag_name":[[:space:]]*"\\(v[0-9][^"]*\\)".*/\\1/p\' | head -1); [ -n "$t" ] && curl -fsSL -o /tmp/akeru-install-linux.sh "https://raw.githubusercontent.com/opencoredev/akeru-bot/$t/scripts/install-linux.sh" && bash /tmp/akeru-install-linux.sh --tag "$t"; rm -f /tmp/akeru-install-linux.sh';
+  't=$(curl -fsSL https://api.github.com/repos/opencoredev/akeru-bot/releases/latest | sed -n \'s/.*"tag_name":[[:space:]]*"\\(v[0-9][^"]*\\)".*/\\1/p\' | head -1); if [ -z "$t" ]; then echo "Could not resolve the latest Akeru Bot release." >&2; (exit 1); else f=$(mktemp /tmp/akeru-install.XXXXXX) && curl -fsSL -o "$f" "https://raw.githubusercontent.com/opencoredev/akeru-bot/$t/scripts/install-linux.sh" && bash "$f" --tag "$t"; rc=$?; rm -f "${f:-/tmp/akeru-install-none}"; (exit $rc); fi';
 
 export const LINUX_DOWNLOAD_DIALOG_TITLE = "Install with one command in Terminal";
 

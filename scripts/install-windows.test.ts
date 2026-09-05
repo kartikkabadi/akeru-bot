@@ -60,9 +60,11 @@ describe("install-windows.ps1", () => {
     NodeAssert.ok(script.indexOf("Unblock-File") > hashIndex);
   });
 
-  it("unblocks the installer and runs it without silent flags", () => {
+  it("unblocks the installer, checks its exit code, and runs it without silent flags", () => {
     NodeAssert.match(script, /^Unblock-File -Path \$installerPath$/m);
-    NodeAssert.match(script, /Start-Process -FilePath \$installerPath -Wait/);
+    NodeAssert.match(script, /\$proc = Start-Process -FilePath \$installerPath -Wait -PassThru/);
+    NodeAssert.match(script, /if \(\$proc\.ExitCode -ne 0\)/);
+    NodeAssert.match(script, /installer exited with code/);
     NodeAssert.ok(script.indexOf("Start-Process") > script.indexOf("Unblock-File"));
     NodeAssert.doesNotMatch(script, /\/verysilent/i);
     NodeAssert.doesNotMatch(script, /\/silent/i);

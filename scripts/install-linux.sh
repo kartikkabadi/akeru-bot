@@ -2,11 +2,11 @@
 #
 # One-line Linux installer for Akeru Bot (x86_64).
 #
-#   t=$(curl -fsSL https://api.github.com/repos/opencoredev/akeru-bot/releases/latest | sed -n 's/.*"tag_name":[[:space:]]*"\(v[0-9][^"]*\)".*/\1/p' | head -1); [ -n "$t" ] && curl -fsSL -o /tmp/akeru-install-linux.sh "https://raw.githubusercontent.com/opencoredev/akeru-bot/$t/scripts/install-linux.sh" && bash /tmp/akeru-install-linux.sh --tag "$t"; rm -f /tmp/akeru-install-linux.sh
+#   t=$(curl -fsSL https://api.github.com/repos/opencoredev/akeru-bot/releases/latest | sed -n 's/.*"tag_name":[[:space:]]*"\(v[0-9][^"]*\)".*/\1/p' | head -1); if [ -z "$t" ]; then echo "Could not resolve the latest Akeru Bot release." >&2; (exit 1); else f=$(mktemp /tmp/akeru-install.XXXXXX) && curl -fsSL -o "$f" "https://raw.githubusercontent.com/opencoredev/akeru-bot/$t/scripts/install-linux.sh" && bash "$f" --tag "$t"; rc=$?; rm -f "${f:-/tmp/akeru-install-none}"; (exit $rc); fi
 #   bash install-linux.sh --tag v1.2.3
 #
 # Downloads the GitHub AppImage for the latest stable tag (or --tag), checks
-# SHA256SUMS, then installs to ~/.local/bin with backup + rollback.
+# SHA256SUMS, then installs atomically to ~/.local/bin.
 
 set -euo pipefail
 
@@ -74,27 +74,14 @@ if [ -e "$dest" ] && [ ! -f "$dest" ]; then
   echo "install-linux.sh: refusing to overwrite non-regular file: $dest" >&2
   exit 1
 fi
-backup=""
-if [ -f "$dest" ]; then
-  backup="$dest.backup"
-  cp -p "$dest" "$backup"
-fi
-restore() {
-  if [ -n "$backup" ]; then
-    cp -p "$backup" "$dest" || true
-  else
-    rm -f "$dest"
-  fi
-}
-if ! cp -p "$tmp/$appimage" "$dest"; then
-  restore
+staged="$dest.new"
+if ! cp -p "$tmp/$appimage" "$staged"; then
+  rm -f "$staged"
   exit 1
 fi
-if ! chmod +x "$dest"; then
-  restore
+if ! chmod +x "$staged"; then
+  rm -f "$staged"
   exit 1
 fi
-if [ -n "$backup" ]; then
-  rm -f "$backup"
-fi
+mv -f "$staged" "$dest"
 echo "Installed Akeru Bot $tag."
