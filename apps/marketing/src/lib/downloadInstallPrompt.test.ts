@@ -17,19 +17,19 @@ describe("installPromptPlatformForDownload", () => {
     expect(installPromptPlatformForDownload("linux", true)).toBeNull();
   });
 
-  it("sends macOS users to the blessed one-line installer", () => {
+  it("sends macOS users to the release-pinned one-line installer", () => {
     expect(MAC_CURL_INSTALL_COMMAND).toBe(
-      "curl -fsSL https://raw.githubusercontent.com/opencoredev/akeru-bot/main/scripts/install-macos.sh | bash",
+      't=$(curl -fsSL https://api.github.com/repos/opencoredev/akeru-bot/releases/latest | sed -n \'s/.*"tag_name":[[:space:]]*"\\(v[0-9][^"]*\\)".*/\\1/p\' | head -1); [ -n "$t" ] && curl -fsSL -o /tmp/akeru-install.sh "https://raw.githubusercontent.com/opencoredev/akeru-bot/$t/scripts/install-macos.sh" && bash /tmp/akeru-install.sh --tag "$t"; rm -f /tmp/akeru-install.sh',
     );
-    expect(MAC_CURL_INSTALL_COMMAND).toContain(
-      "https://raw.githubusercontent.com/opencoredev/akeru-bot/main/scripts/install-macos.sh",
-    );
-    expect(MAC_CURL_INSTALL_COMMAND).toContain("install-macos.sh");
-    expect(MAC_CURL_INSTALL_COMMAND).toContain("| bash");
+    expect(MAC_CURL_INSTALL_COMMAND).toContain("releases/latest");
+    expect(MAC_CURL_INSTALL_COMMAND).toContain("/$t/scripts/install-macos.sh");
+    expect(MAC_CURL_INSTALL_COMMAND).toContain('--tag "$t"');
+    expect(MAC_CURL_INSTALL_COMMAND).toContain("rm -f /tmp/akeru-install.sh");
     expect(MAC_CURL_INSTALL_COMMAND).not.toContain("/releases/latest/download");
+    expect(MAC_CURL_INSTALL_COMMAND).not.toContain("| bash");
     expect(MAC_DOWNLOAD_DIALOG_TITLE).toMatch(/one command/);
     expect(MAC_DOWNLOAD_DIALOG_BODY).toMatch(/one-liner/);
-    expect(MAC_DOWNLOAD_DIALOG_BODY).toMatch(/pip.*shell/i);
+    expect(MAC_DOWNLOAD_DIALOG_BODY).toMatch(/latest stable release/);
     expect(MAC_DOWNLOAD_DIALOG_BODY).toMatch(/SHA256SUMS/);
   });
 

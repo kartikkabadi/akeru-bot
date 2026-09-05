@@ -35,10 +35,11 @@ On macOS (Apple silicon), install from Terminal. Safari and Chrome quarantine un
 download looks damaged even when the file is fine. `curl` does not set that flag:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/opencoredev/akeru-bot/main/scripts/install-macos.sh | bash
+t=$(curl -fsSL https://api.github.com/repos/opencoredev/akeru-bot/releases/latest | sed -n 's/.*"tag_name":[[:space:]]*"\(v[0-9][^"]*\)".*/\1/p' | head -1); [ -n "$t" ] && curl -fsSL -o /tmp/akeru-install.sh "https://raw.githubusercontent.com/opencoredev/akeru-bot/$t/scripts/install-macos.sh" && bash /tmp/akeru-install.sh --tag "$t"; rm -f /tmp/akeru-install.sh
 ```
 
-The script is auditable at
+The command resolves the latest stable release tag, downloads that tag's installer script,
+then runs it against the same tag, so script and DMG always match. The script is auditable at
 [`scripts/install-macos.sh`](https://github.com/opencoredev/akeru-bot/blob/main/scripts/install-macos.sh).
 It:
 
