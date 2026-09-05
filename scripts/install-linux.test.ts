@@ -100,16 +100,18 @@ describe("install-linux.sh", () => {
     NodeAssert.doesNotMatch(script, /shasum/);
   });
 
-  it("installs atomically to ~/.local/bin with no partial binary", () => {
+  it("installs atomically to ~/.local/bin with a per-run staging path", () => {
     NodeAssert.match(script, /dest="\$HOME\/\.local\/bin\/akeru-bot"/);
     NodeAssert.match(script, /mkdir -p "\$HOME\/\.local\/bin"/);
     NodeAssert.match(script, /if \[ -e "\$dest" \] && \[ ! -f "\$dest" \]; then/);
     NodeAssert.match(script, /refusing to overwrite non-regular file/);
-    NodeAssert.match(script, /staged="\$dest\.new"/);
+    NodeAssert.match(script, /staged="\$dest\.new\.\$\$"/);
+    NodeAssert.match(script, /trap 'rm -f "\$staged"' EXIT/);
     NodeAssert.match(script, /cp -p "\$tmp\/\$appimage" "\$staged"/);
     NodeAssert.match(script, /chmod \+x "\$staged"/);
     NodeAssert.match(script, /mv -f "\$staged" "\$dest"/);
     NodeAssert.doesNotMatch(script, /cp -p "\$tmp\/\$appimage" "\$dest"/);
+    NodeAssert.doesNotMatch(script, /staged="\$dest\.new"/);
     NodeAssert.doesNotMatch(script, /\.backup/);
   });
 

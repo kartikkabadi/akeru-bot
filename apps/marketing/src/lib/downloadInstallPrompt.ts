@@ -7,7 +7,7 @@ export const MAC_DOWNLOAD_DIALOG_BODY =
   "Safari and Chrome quarantine unsigned Mac apps, so Gatekeeper says Akeru Bot is damaged. Paste this one-liner in Terminal. It resolves the latest stable release, downloads that release's installer, checks the DMG against SHA256SUMS, then installs.";
 
 export const WIN_POWERSHELL_INSTALL_COMMAND =
-  "$t = (Invoke-RestMethod https://api.github.com/repos/opencoredev/akeru-bot/releases/latest -ErrorAction Stop).tag_name; if ($t -match '^v\\d+\\.\\d+\\.\\d+$') { $f = [IO.Path]::ChangeExtension((New-TemporaryFile).FullName, '.ps1'); Invoke-WebRequest \"https://raw.githubusercontent.com/opencoredev/akeru-bot/$t/scripts/install-windows.ps1\" -OutFile $f -ErrorAction Stop; try { & $f -Tag $t } finally { Remove-Item $f } } else { throw \"Could not resolve the latest Akeru Bot release.\" }";
+  '$t = (Invoke-RestMethod https://api.github.com/repos/opencoredev/akeru-bot/releases/latest -ErrorAction Stop).tag_name; if ($t -match \'^v\\d+\\.\\d+\\.\\d+$\') { $f = Join-Path $env:TEMP $("akeru-install-$([Guid]::NewGuid()).ps1"); Invoke-WebRequest "https://raw.githubusercontent.com/opencoredev/akeru-bot/$t/scripts/install-windows.ps1" -OutFile $f -ErrorAction Stop; try { & $f -Tag $t } finally { Remove-Item $f } } else { throw "Could not resolve the latest Akeru Bot release." }';
 
 export const WIN_DOWNLOAD_DIALOG_TITLE = "Install with one command in PowerShell";
 

@@ -74,7 +74,8 @@ if [ -e "$dest" ] && [ ! -f "$dest" ]; then
   echo "install-linux.sh: refusing to overwrite non-regular file: $dest" >&2
   exit 1
 fi
-staged="$dest.new"
+staged="$dest.new.$$"
+trap 'rm -f "$staged"' EXIT
 if ! cp -p "$tmp/$appimage" "$staged"; then
   rm -f "$staged"
   exit 1
