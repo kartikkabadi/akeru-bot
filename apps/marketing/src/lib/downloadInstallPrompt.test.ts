@@ -5,6 +5,7 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   MAC_CURL_INSTALL_COMMAND,
   MAC_DOWNLOAD_DIALOG_BODY,
+  MAC_DOWNLOAD_DIALOG_TITLE,
   installPromptPlatformForDownload,
 } from "./downloadInstallPrompt";
 
@@ -16,41 +17,20 @@ describe("installPromptPlatformForDownload", () => {
     expect(installPromptPlatformForDownload("linux", true)).toBeNull();
   });
 
-  it("sends macOS users to a checksummed GitHub DMG instead of a quarantined download", () => {
-    expect(MAC_CURL_INSTALL_COMMAND).toContain(
-      "https://github.com/opencoredev/akeru-bot/releases/download/${tag}",
-    );
-    expect(MAC_CURL_INSTALL_COMMAND).toContain("|| exit 1");
-    expect(MAC_CURL_INSTALL_COMMAND).toContain("shasum -a 256 -c -");
-    expect(MAC_CURL_INSTALL_COMMAND).toContain("hdiutil attach");
-    expect(MAC_CURL_INSTALL_COMMAND).toContain('ditto "$source_app" "$prepared_app"');
-    expect(MAC_CURL_INSTALL_COMMAND).toContain("Print :CFBundleIdentifier");
-    expect(MAC_CURL_INSTALL_COMMAND).toContain('[ "$identifier" = dev.leodoes.akeru ]');
-    expect(MAC_CURL_INSTALL_COMMAND).toContain("ditto");
-    expect(MAC_CURL_INSTALL_COMMAND).toContain('install_id="$(uuidgen)"');
-    expect(MAC_CURL_INSTALL_COMMAND).toContain(
-      'new_app="/Applications/.Akeru Bot (Alpha).app.installing.$install_id"',
+  it("sends macOS users to the blessed one-line installer", () => {
+    expect(MAC_CURL_INSTALL_COMMAND).toBe(
+      "curl -fsSL https://raw.githubusercontent.com/opencoredev/akeru-bot/main/scripts/install-macos.sh | bash",
     );
     expect(MAC_CURL_INSTALL_COMMAND).toContain(
-      'old_app="/Applications/.Akeru Bot (Alpha).app.backup.$install_id"',
+      "https://raw.githubusercontent.com/opencoredev/akeru-bot/main/scripts/install-macos.sh",
     );
-    expect(MAC_CURL_INSTALL_COMMAND).not.toContain("backup.$$");
-    expect(MAC_CURL_INSTALL_COMMAND).toContain('mv " & installedApp & " " & oldApp');
-    expect(MAC_CURL_INSTALL_COMMAND).toContain('mv " & newApp & " " & installedApp');
-    expect(MAC_CURL_INSTALL_COMMAND).toContain('mv " & oldApp & " " & installedApp');
-    expect(MAC_CURL_INSTALL_COMMAND).toContain(
-      'echo Previous application remains at " & oldApp & " >&2',
-    );
-    expect(MAC_CURL_INSTALL_COMMAND).toContain('" || { rm -rf " & newApp & "; exit 1; }');
-    expect(MAC_CURL_INSTALL_COMMAND).not.toContain("install_app()");
-    expect(MAC_CURL_INSTALL_COMMAND).toContain("xattr -d com.apple.quarantine");
-    expect(MAC_CURL_INSTALL_COMMAND).toContain('open "$app"');
+    expect(MAC_CURL_INSTALL_COMMAND).toContain("install-macos.sh");
+    expect(MAC_CURL_INSTALL_COMMAND).toContain("| bash");
     expect(MAC_CURL_INSTALL_COMMAND).not.toContain("/releases/latest/download");
-    expect(MAC_CURL_INSTALL_COMMAND).not.toContain("| bash");
-    expect(MAC_CURL_INSTALL_COMMAND).not.toContain("install-macos.sh");
-    expect(MAC_DOWNLOAD_DIALOG_BODY).toMatch(/Safari and Chrome quarantine/);
-    expect(MAC_DOWNLOAD_DIALOG_BODY).toMatch(/damaged/);
-    expect(MAC_DOWNLOAD_DIALOG_BODY).toMatch(/curl does not quarantine/);
+    expect(MAC_DOWNLOAD_DIALOG_TITLE).toMatch(/one command/);
+    expect(MAC_DOWNLOAD_DIALOG_BODY).toMatch(/one-liner/);
+    expect(MAC_DOWNLOAD_DIALOG_BODY).toMatch(/pip.*shell/i);
+    expect(MAC_DOWNLOAD_DIALOG_BODY).toMatch(/SHA256SUMS/);
   });
 
   it("keeps the install docs on the same fail-closed recipe", () => {
