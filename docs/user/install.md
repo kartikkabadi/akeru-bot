@@ -53,6 +53,38 @@ It:
 Windows and Linux installers are on the same [GitHub Releases](https://github.com/opencoredev/akeru-bot/releases)
 page.
 
+On Windows 10 or 11 (x64), install from PowerShell:
+
+```powershell
+$t = (Invoke-RestMethod https://api.github.com/repos/opencoredev/akeru-bot/releases/latest).tag_name; if ($t) { Invoke-WebRequest "https://raw.githubusercontent.com/opencoredev/akeru-bot/$t/scripts/install-windows.ps1" -OutFile "$env:TEMP\akeru-install.ps1"; & "$env:TEMP\akeru-install.ps1" -Tag $t; Remove-Item "$env:TEMP\akeru-install.ps1" }
+```
+
+The command resolves the latest stable release tag, downloads that tag's installer script,
+then runs it against the same tag, so script and exe always match. The script is auditable at
+[`scripts/install-windows.ps1`](https://github.com/opencoredev/akeru-bot/blob/main/scripts/install-windows.ps1).
+It:
+
+- Requires Windows on AMD64 and exits otherwise. ARM64 and x86 are not supported.
+- Resolves the latest stable `vX.Y.Z` tag via the releases API, then downloads that tag's x64 exe and `SHA256SUMS`.
+- Verifies the exe by requiring `SHA256SUMS` to contain exactly that asset's entry and matching the file's SHA-256 hash before running it.
+- Unblocks the downloaded file, then runs the installer and reports `Installed Akeru Bot <tag>.`
+
+On Linux (x86_64), install from Terminal:
+
+```bash
+t=$(curl -fsSL https://api.github.com/repos/opencoredev/akeru-bot/releases/latest | sed -n 's/.*"tag_name":[[:space:]]*"\(v[0-9][^"]*\)".*/\1/p' | head -1); [ -n "$t" ] && curl -fsSL -o /tmp/akeru-install-linux.sh "https://raw.githubusercontent.com/opencoredev/akeru-bot/$t/scripts/install-linux.sh" && bash /tmp/akeru-install-linux.sh --tag "$t"; rm -f /tmp/akeru-install-linux.sh
+```
+
+The command resolves the latest stable release tag, downloads that tag's installer script,
+then runs it against the same tag, so script and AppImage always match. The script is auditable at
+[`scripts/install-linux.sh`](https://github.com/opencoredev/akeru-bot/blob/main/scripts/install-linux.sh).
+It:
+
+- Requires Linux on x86_64 or amd64 and exits otherwise.
+- Resolves the latest stable `vX.Y.Z` tag via the releases API, then downloads that tag's x64 AppImage and `SHA256SUMS`.
+- Verifies the AppImage by requiring `SHA256SUMS` to contain that asset's entry and matching the file's SHA-256 hash before installing.
+- Installs the verified AppImage to `~/.local/bin/akeru-bot`, keeping the previous copy at `~/.local/bin/akeru-bot.backup` until the new copy is in place, then reports `Installed Akeru Bot <tag>.`
+
 If Safari or Chrome already downloaded the DMG, discard that copy and use the Terminal command above.
 Do not turn off Gatekeeper or change a system-wide security setting.
 
