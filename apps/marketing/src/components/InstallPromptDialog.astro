@@ -79,7 +79,7 @@ import {
   let trigger: HTMLAnchorElement | null = null;
 
   function installDialogForPlatform(value: string | null) {
-    return (value && INSTALL_DIALOG_CONTENT[value]) ?? INSTALL_DIALOG_CONTENT.mac;
+    return (value ? INSTALL_DIALOG_CONTENT[value] : undefined) ?? INSTALL_DIALOG_CONTENT.mac;
   }
 
 
