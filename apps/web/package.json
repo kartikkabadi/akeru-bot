@@ -44,7 +44,7 @@
     "jose": "catalog:",
     "jsonc-parser": "3.3.1",
     "jszip": "3.10.1",
-    "katex": "^0.18.5",
+    "katex": "^0.18.11",
     "lexical": "^0.41.0",
     "lucide-react": "^0.564.0",
     "mermaid": "^11.17.2",

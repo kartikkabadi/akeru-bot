@@ -1,0 +1,29 @@
+diff --git a/index.cjs b/index.cjs
+new file mode 100644
+index 0000000000000000000000000000000000000000..96c093e21af4ef77988bb55829ec43cf2b8ec37c
+--- /dev/null
++++ b/index.cjs
+@@ -0,0 +1,2 @@
++// Preserve the callable CommonJS API for query-string 7 on the workspace Node 24 runtime.
++module.exports = require("./index.js").default;
+diff --git a/package.json b/package.json
+index 8d01f060a3a2da1ee19861badf97d0b5db7192f6..44b31a469b52e781ade81424bdada4997ec9cb1b 100644
+--- a/package.json
++++ b/package.json
+@@ -13,6 +13,8 @@
+ 	"type": "module",
+ 	"exports": {
+ 		"types": "./index.d.ts",
++		"import": "./index.js",
++		"require": "./index.cjs",
+ 		"default": "./index.js"
+ 	},
+ 	"engines": {
+@@ -23,6 +25,7 @@
+ 		"coveralls": "nyc report --reporter=text-lcov | coveralls"
+ 	},
+ 	"files": [
++		"index.cjs",
+ 		"index.js",
+ 		"index.d.ts"
+ 	],
